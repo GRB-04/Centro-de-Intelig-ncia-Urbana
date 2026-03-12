@@ -4,25 +4,12 @@ import {
   Clock,
   MapPin,
   Tag,
-  TrendingUp,
-  TrendingDown,
 } from "lucide-react";
-import { METRICS } from "../data/issues";
+import type { Issue } from "../Dashboard";
 
 interface MetricsPanelProps {
   darkMode: boolean;
-}
-
-interface MetricCardProps {
-  darkMode: boolean;
-  icon: React.ReactNode;
-  iconBg: string;
-  label: string;
-  value: string | number;
-  sub?: string;
-  trend?: "up" | "down" | "neutral";
-  trendLabel?: string;
-  accentColor: string;
+  issues?: Issue[]; // 👈 agora é opcional
 }
 
 function MetricCard({
@@ -32,67 +19,25 @@ function MetricCard({
   label,
   value,
   sub,
-  trend,
-  trendLabel,
   accentColor,
-}: MetricCardProps) {
+}: any) {
   return (
     <div
       className="flex-1 min-w-[180px] rounded-2xl p-5 flex flex-col gap-3"
       style={{
         backgroundColor: darkMode ? "#1E1E1E" : "#FFFFFF",
         border: `1px solid ${darkMode ? "#2a2a2a" : "#EEF1F5"}`,
-        boxShadow: darkMode
-          ? "0 0 0 1px rgba(255,255,255,0.04)"
-          : "0 2px 8px rgba(0,0,0,0.05)",
       }}
     >
-      <div className="flex items-start justify-between">
-        <div
-          className="w-10 h-10 rounded-xl flex items-center justify-center"
-          style={{ backgroundColor: iconBg }}
-        >
-          {icon}
-        </div>
-        {trend && trendLabel && (
-          <div
-            className="flex items-center gap-1 text-xs px-2 py-1 rounded-full"
-            style={{
-              backgroundColor:
-                trend === "up"
-                  ? darkMode
-                    ? "#1a2a1a"
-                    : "#F0FAF0"
-                  : trend === "down"
-                  ? darkMode
-                    ? "#2a1a1a"
-                    : "#FFF5F5"
-                  : darkMode
-                  ? "#2a2a2a"
-                  : "#F5F7FA",
-              color:
-                trend === "up"
-                  ? "#2E7D32"
-                  : trend === "down"
-                  ? "#E53935"
-                  : "#6B7280",
-            }}
-          >
-            {trend === "up" ? (
-              <TrendingUp size={11} />
-            ) : trend === "down" ? (
-              <TrendingDown size={11} />
-            ) : null}
-            <span>{trendLabel}</span>
-          </div>
-        )}
+      <div
+        className="w-10 h-10 rounded-xl flex items-center justify-center"
+        style={{ backgroundColor: iconBg }}
+      >
+        {icon}
       </div>
 
       <div>
-        <p
-          className="text-xs uppercase tracking-wider mb-1"
-          style={{ color: darkMode ? "#666" : "#9CA3AF", letterSpacing: "0.06em" }}
-        >
+        <p className="text-xs uppercase mb-1" style={{ color: "#9CA3AF" }}>
           {label}
         </p>
         <p
@@ -100,15 +45,13 @@ function MetricCard({
           style={{
             color: accentColor,
             fontWeight: 700,
-            lineHeight: 1,
             fontVariantNumeric: "tabular-nums",
-            letterSpacing: "-0.02em",
           }}
         >
           {value}
         </p>
         {sub && (
-          <p className="text-xs mt-1" style={{ color: darkMode ? "#555" : "#9CA3AF" }}>
+          <p className="text-xs mt-1" style={{ color: "#9CA3AF" }}>
             {sub}
           </p>
         )}
@@ -117,82 +60,105 @@ function MetricCard({
   );
 }
 
-export function MetricsPanel({ darkMode }: MetricsPanelProps) {
+export function MetricsPanel({ darkMode, issues = [] }: MetricsPanelProps) {
+  // 👆 DEFAULT = [] → nunca mais quebra
+
+  const totalActive = issues.filter(
+    (i) => i.status !== "resolvido"
+  ).length;
+
+  const now = new Date();
+
+  const resolvedThisMonth = issues.filter((i) => {
+    if (i.status !== "resolvido") return false;
+    const d = new Date(i.created_at);
+    return (
+      d.getMonth() === now.getMonth() &&
+      d.getFullYear() === now.getFullYear()
+    );
+  }).length;
+
+  const openIssues = issues.filter(
+    (i) => i.status !== "resolvido"
+  );
+
+  const avgResponseDays =
+    openIssues.length === 0
+      ? 0
+      : Math.round(
+          openIssues.reduce((acc, i) => {
+            const days =
+              (Date.now() - new Date(i.created_at).getTime()) /
+              (1000 * 60 * 60 * 24);
+            return acc + days;
+          }, 0) / openIssues.length
+        );
+
+  const neighborhoodMap: Record<string, number> = {};
+  issues.forEach((i) => {
+    if (!i.neighborhood) return;
+    neighborhoodMap[i.neighborhood] =
+      (neighborhoodMap[i.neighborhood] || 0) + 1;
+  });
+
+  const mostIssuesNeighborhood =
+    Object.entries(neighborhoodMap).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "—";
+
+  const categoryMap: Record<string, number> = {};
+  issues.forEach((i) => {
+    categoryMap[i.category] =
+      (categoryMap[i.category] || 0) + 1;
+  });
+
+  const mostCategory =
+    Object.entries(categoryMap).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "—";
+
   return (
     <section className="w-full">
-      <div className="flex items-center gap-2 mb-4">
-        <div
-          className="w-1 h-5 rounded-full"
-          style={{ backgroundColor: "#1565C0" }}
-        />
-        <h2
-          className="text-xs uppercase tracking-widest"
-          style={{ color: darkMode ? "#888" : "#6B7280", letterSpacing: "0.1em" }}
-        >
-          Indicadores Urbanos em Tempo Real
-        </h2>
-        <div className="flex-1 border-t" style={{ borderColor: darkMode ? "#2a2a2a" : "#EEF1F5" }} />
-        <span
-          className="text-xs px-2 py-0.5 rounded-full"
-          style={{
-            backgroundColor: darkMode ? "#1a2a1a" : "#F0FAF0",
-            color: "#2E7D32",
-          }}
-        >
-          ● Ao vivo
-        </span>
-      </div>
-
       <div className="flex flex-wrap gap-4">
         <MetricCard
           darkMode={darkMode}
           icon={<AlertTriangle size={18} color="#E53935" />}
-          iconBg={darkMode ? "#2a1818" : "#FFF0F0"}
+          iconBg="#FFF0F0"
           label="Ocorrências Ativas"
-          value={METRICS.totalActive.toLocaleString("pt-BR")}
-          sub="Em toda a cidade"
-          trend="down"
-          trendLabel="-8% este mês"
+          value={totalActive}
+          sub="Não resolvidas"
           accentColor="#E53935"
         />
+
         <MetricCard
           darkMode={darkMode}
           icon={<CheckCircle2 size={18} color="#2E7D32" />}
-          iconBg={darkMode ? "#1a2a1a" : "#F0FAF0"}
+          iconBg="#F0FAF0"
           label="Resolvidas no Mês"
-          value={METRICS.resolvedThisMonth}
-          sub="Fevereiro/2026"
-          trend="up"
-          trendLabel="+12% vs jan"
+          value={resolvedThisMonth}
           accentColor="#2E7D32"
         />
+
         <MetricCard
           darkMode={darkMode}
           icon={<Clock size={18} color="#FF9800" />}
-          iconBg={darkMode ? "#2a2010" : "#FFF8E1"}
-          label="Tempo Médio de Resposta"
-          value={`${METRICS.avgResponseDays}d`}
-          sub="Meta: 5 dias"
-          trend="down"
-          trendLabel="-1.3d vs meta"
+          iconBg="#FFF8E1"
+          label="Tempo Médio (dias)"
+          value={avgResponseDays}
           accentColor="#FF9800"
         />
+
         <MetricCard
           darkMode={darkMode}
           icon={<MapPin size={18} color="#1565C0" />}
-          iconBg={darkMode ? "#0d1a2e" : "#E3F0FF"}
-          label="Bairro Mais Crítico"
-          value={METRICS.mostIssuesNeighborhood}
-          sub="142 ocorrências ativas"
+          iconBg="#E3F0FF"
+          label="Bairro com Mais Ocorrências"
+          value={mostIssuesNeighborhood}
           accentColor="#1565C0"
         />
+
         <MetricCard
           darkMode={darkMode}
           icon={<Tag size={18} color="#7B3F9E" />}
-          iconBg={darkMode ? "#1e1228" : "#F3E8FF"}
-          label="Categoria Mais Crítica"
-          value="Vias e Pavim."
-          sub="38% das ocorrências"
+          iconBg="#F3E8FF"
+          label="Categoria Mais Frequente"
+          value={mostCategory}
           accentColor="#7B3F9E"
         />
       </div>
