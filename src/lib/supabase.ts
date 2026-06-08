@@ -3,8 +3,15 @@ import { createClient } from "@supabase/supabase-js";
 const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL as string | undefined;
 const supabaseAnonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error("Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY in .env");
+export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
+
+if (!isSupabaseConfigured) {
+  console.warn("Supabase is not configured. Some features may not work.");
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+// Always create a client — if not configured, it uses a placeholder URL
+// that will just fail gracefully. Components check isSupabaseConfigured before calling.
+export const supabase = createClient(
+  supabaseUrl ?? "https://placeholder.supabase.co",
+  supabaseAnonKey ?? "placeholder-anon-key"
+);

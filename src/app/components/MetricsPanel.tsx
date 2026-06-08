@@ -9,7 +9,35 @@ import type { Issue } from "../Dashboard";
 
 interface MetricsPanelProps {
   darkMode: boolean;
-  issues?: Issue[]; // 👈 agora é opcional
+  issues?: Issue[];
+  loading?: boolean;
+}
+
+function SkeletonCard({ darkMode }: { darkMode: boolean }) {
+  return (
+    <div
+      className="flex-1 min-w-[180px] rounded-2xl p-5 flex flex-col gap-3"
+      style={{
+        backgroundColor: darkMode ? "#1E1E1E" : "#FFFFFF",
+        border: `1px solid ${darkMode ? "#2a2a2a" : "#EEF1F5"}`,
+      }}
+    >
+      <div
+        className="w-10 h-10 rounded-xl animate-pulse"
+        style={{ backgroundColor: darkMode ? "#2a2a2a" : "#EEF1F5" }}
+      />
+      <div>
+        <div
+          className="h-2.5 rounded-full mb-2 animate-pulse"
+          style={{ backgroundColor: darkMode ? "#2a2a2a" : "#EEF1F5", width: "60%" }}
+        />
+        <div
+          className="h-8 rounded-lg animate-pulse"
+          style={{ backgroundColor: darkMode ? "#2a2a2a" : "#EEF1F5", width: "40%" }}
+        />
+      </div>
+    </div>
+  );
 }
 
 function MetricCard({
@@ -60,27 +88,26 @@ function MetricCard({
   );
 }
 
-export function MetricsPanel({ darkMode, issues = [] }: MetricsPanelProps) {
-  // 👆 DEFAULT = [] → nunca mais quebra
+export function MetricsPanel({ darkMode, issues = [], loading = false }: MetricsPanelProps) {
+  if (loading) {
+    return (
+      <section className="w-full">
+        <div className="flex flex-wrap gap-4">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <SkeletonCard key={i} darkMode={darkMode} />
+          ))}
+        </div>
+      </section>
+    );
+  }
 
-  const totalActive = issues.filter(
-    (i) => i.status !== "resolvido"
-  ).length;
+  const totalActive = issues.filter((i) => i.status !== "resolvido").length;
 
   const now = new Date();
 
-  const resolvedThisMonth = issues.filter((i) => {
-    if (i.status !== "resolvido") return false;
-    const d = new Date(i.created_at);
-    return (
-      d.getMonth() === now.getMonth() &&
-      d.getFullYear() === now.getFullYear()
-    );
-  }).length;
+  const resolvedTotal = issues.filter((i) => i.status === "resolvido").length;
 
-  const openIssues = issues.filter(
-    (i) => i.status !== "resolvido"
-  );
+  const openIssues = issues.filter((i) => i.status !== "resolvido");
 
   const avgResponseDays =
     openIssues.length === 0
@@ -97,8 +124,7 @@ export function MetricsPanel({ darkMode, issues = [] }: MetricsPanelProps) {
   const neighborhoodMap: Record<string, number> = {};
   issues.forEach((i) => {
     if (!i.neighborhood) return;
-    neighborhoodMap[i.neighborhood] =
-      (neighborhoodMap[i.neighborhood] || 0) + 1;
+    neighborhoodMap[i.neighborhood] = (neighborhoodMap[i.neighborhood] || 0) + 1;
   });
 
   const mostIssuesNeighborhood =
@@ -106,12 +132,16 @@ export function MetricsPanel({ darkMode, issues = [] }: MetricsPanelProps) {
 
   const categoryMap: Record<string, number> = {};
   issues.forEach((i) => {
-    categoryMap[i.category] =
-      (categoryMap[i.category] || 0) + 1;
+    categoryMap[i.category] = (categoryMap[i.category] || 0) + 1;
   });
 
   const mostCategory =
     Object.entries(categoryMap).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "—";
+
+  const openedThisMonth = issues.filter((i) => {
+    const d = new Date(i.created_at);
+    return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+  }).length;
 
   return (
     <section className="w-full">
@@ -122,7 +152,7 @@ export function MetricsPanel({ darkMode, issues = [] }: MetricsPanelProps) {
           iconBg="#FFF0F0"
           label="Ocorrências Ativas"
           value={totalActive}
-          sub="Não resolvidas"
+          sub={`+${openedThisMonth} abertas este mês`}
           accentColor="#E53935"
         />
 
@@ -130,8 +160,9 @@ export function MetricsPanel({ darkMode, issues = [] }: MetricsPanelProps) {
           darkMode={darkMode}
           icon={<CheckCircle2 size={18} color="#2E7D32" />}
           iconBg="#F0FAF0"
-          label="Resolvidas no Mês"
-          value={resolvedThisMonth}
+          label="Total Resolvidas"
+          value={resolvedTotal}
+          sub="Desde o início"
           accentColor="#2E7D32"
         />
 
@@ -141,6 +172,7 @@ export function MetricsPanel({ darkMode, issues = [] }: MetricsPanelProps) {
           iconBg="#FFF8E1"
           label="Tempo Médio (dias)"
           value={avgResponseDays}
+          sub="Ocorrências abertas"
           accentColor="#FF9800"
         />
 

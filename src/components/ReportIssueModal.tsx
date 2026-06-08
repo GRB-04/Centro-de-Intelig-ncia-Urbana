@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import L from 'leaflet'
-import { MapContainer, Marker, TileLayer, useMap, useMapEvents } from 'react-leaflet'
+import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from "react-leaflet"
+import "leaflet/dist/leaflet.css"
+import L from "leaflet"
 import { ImagePlus, Loader2, MapPin } from 'lucide-react'
 import type { Occurrence, OccurrenceSeverity } from '../types/occurrence'
 import type { AddressSuggestion } from '../services/geocoding'
-import { searchAddresses } from '../services/geocoding'
+import { searchAddresses, reverseGeocode } from '../services/geocoding'
 import './report-issue-modal.css'
 
 interface ReportIssueModalProps {
   onClose: () => void
   onCreate: (occurrence: Occurrence) => void
+  initialData?: any
+  theme?: 'light' | 'dark'
 }
 
 type CategoryOption =
@@ -39,55 +42,98 @@ const CATEGORY_OPTIONS: CategoryOption[] = [
 
 const DEFAULT_CENTER: [number, number] = [-1.4558, -48.4902]
 
-delete (L.Icon.Default.prototype as L.Icon.Default & { _getIconUrl?: unknown })._getIconUrl
+// Custom blue pin marker for selection
+const markerIcon = L.divIcon({
+  html: `
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; transform: translateY(-12px);">
+      <svg width="28" height="34" viewBox="0 0 24 30" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0px 3px 4px rgba(0, 0, 0, 0.3));">
+        <path d="M12 0C5.37 0 0 5.37 0 12C0 21 12 30 12 30C12 30 24 21 24 12C24 5.37 18.63 0 12 0Z" fill="#007aff"/>
+        <circle cx="12" cy="12" r="5" fill="white" />
+      </svg>
+    </div>
+  `,
+  className: "custom-leaflet-marker",
+  iconSize: [28, 34],
+  iconAnchor: [14, 34]
+});
 
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-})
+// Component to handle map clicks in Leaflet
+interface MapEventsHandlerProps {
+  onMapClick: (lat: number, lng: number) => void;
+}
 
-function MapClickHandler({
-  onPick,
-}: {
-  onPick: (lat: number, lng: number) => void
-}) {
+function MapEventsHandler({ onMapClick }: MapEventsHandlerProps) {
   useMapEvents({
-    click(event) {
-      onPick(event.latlng.lat, event.latlng.lng)
+    click(e) {
+      onMapClick(e.latlng.lat, e.latlng.lng);
     },
-  })
-
-  return null
+  });
+  return null;
 }
 
-function MapViewportUpdater({
-  position,
-}: {
-  position: [number, number] | null
-}) {
-  const map = useMap()
+// Component to fly map to coordinates programmatically
+interface MapFlyProps {
+  center: [number, number];
+  zoom: number;
+}
 
+function MapFly({ center, zoom }: MapFlyProps) {
+  const map = useMap();
   useEffect(() => {
-    if (position) {
-      map.flyTo(position, 16, { duration: 0.8 })
-    }
-  }, [map, position])
-
-  return null
+    map.setView(center, zoom, { animate: true, duration: 1.2 });
+  }, [center, zoom, map]);
+  return null;
 }
 
-function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const [address, setAddress] = useState('')
-  const [neighborhood, setNeighborhood] = useState('')
-  const [category, setCategory] = useState<CategoryOption>('Vias e Pavimentação')
-  const [otherCategory, setOtherCategory] = useState('')
-  const [severity, setSeverity] = useState<OccurrenceSeverity>('média')
-  const [anonymous, setAnonymous] = useState(false)
-  const [selectedPosition, setSelectedPosition] = useState<[number, number] | null>(null)
+function ReportIssueModal({ onClose, onCreate, initialData, theme = 'light' }: ReportIssueModalProps) {
+  const isDark = theme === 'dark'
+  const cardBg = isDark ? '#1a1a1e' : '#ffffff'
+  const textColor = isDark ? '#f9fafb' : '#111827'
+  const mutedColor = isDark ? '#9ca3af' : '#6b7280'
+  const inputBg = isDark ? '#242428' : '#f9fafb'
+  const borderColor = isDark ? '#38383e' : 'rgba(17,24,39,0.1)'
+  const [title, setTitle] = useState(initialData?.title ?? '')
+  const [description, setDescription] = useState(initialData?.description ?? '')
+  const [address, setAddress] = useState(initialData?.address ?? '')
+  const [neighborhood, setNeighborhood] = useState(initialData?.neighborhood ?? '')
+  
+  const rawCat = initialData?.category ?? 'Vias e Pavimentação'
+  const isValCat = CATEGORY_OPTIONS.includes(rawCat as CategoryOption)
+  const [category, setCategory] = useState<CategoryOption>(isValCat ? (rawCat as CategoryOption) : 'Outros')
+  const [otherCategory, setOtherCategory] = useState(!isValCat && rawCat !== 'Vias e Pavimentação' ? rawCat : '')
+  
+  let initialSeverity: OccurrenceSeverity = 'média'
+  const rawSev = String(initialData?.severity ?? '').toLowerCase()
+  if (rawSev === 'critical' || rawSev === 'high' || rawSev === 'alta') initialSeverity = 'alta'
+  else if (rawSev === 'low' || rawSev === 'baixa') initialSeverity = 'baixa'
+  const [severity, setSeverity] = useState<OccurrenceSeverity>(initialSeverity)
+  
+  const [anonymous, setAnonymous] = useState(initialData?.anonymous ?? false)
+  
+  const initialLat = initialData?.latitude ?? initialData?.lat
+  const initialLng = initialData?.longitude ?? initialData?.lng
+  
+  const [selectedPosition, setSelectedPosition] = useState<[number, number] | null>(
+    typeof initialLat === 'number' && typeof initialLng === 'number' && !isNaN(initialLat) && !isNaN(initialLng)
+      ? [initialLat, initialLng]
+      : null
+  )
+
+  const [mapCenter, setMapCenter] = useState<[number, number]>(
+    selectedPosition ? selectedPosition : DEFAULT_CENTER
+  )
+  const [mapZoom, setMapZoom] = useState<number>(selectedPosition ? 16 : 13)
+
+  // Update map center when selectedPosition changes
+  useEffect(() => {
+    if (selectedPosition) {
+      setMapCenter(selectedPosition)
+      setMapZoom(16)
+    }
+  }, [selectedPosition])
+
   const [selectedFileName, setSelectedFileName] = useState('')
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([])
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false)
   const [showSuggestions, setShowSuggestions] = useState(false)
@@ -99,7 +145,6 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
     if (category === 'Outros' && otherCategory.trim()) {
       return otherCategory.trim()
     }
-
     return category
   }, [category, otherCategory])
 
@@ -110,10 +155,19 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
         setShowSuggestions(false)
       }
     }
-
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
 
   useEffect(() => {
     if (debounceRef.current) {
@@ -148,26 +202,75 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
     }
   }, [address])
 
+  async function fillAddressFromCoords(lat: number, lng: number) {
+    const result = await reverseGeocode(lat, lng)
+    if (result) {
+      setAddress(result.address)
+      if (result.neighborhood) {
+        setNeighborhood(result.neighborhood)
+      }
+    }
+  }
+
   function handlePickOnMap(lat: number, lng: number) {
     setSelectedPosition([lat, lng])
+    fillAddressFromCoords(lat, lng)
+  }
+
+  async function locateUserByIP() {
+    try {
+      const res = await fetch("https://ipapi.co/json/")
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      if (typeof data.latitude === "number" && typeof data.longitude === "number") {
+        return { lat: data.latitude, lng: data.longitude }
+      }
+    } catch {
+      try {
+        const res = await fetch("https://ip-api.com/json/")
+        const data = await res.json()
+        if (typeof data.lat === "number" && typeof data.lon === "number") {
+          return { lat: data.lat, lng: data.lon }
+        }
+      } catch {}
+    }
+    return null
+  }
+
+  async function tryIPLocate() {
+    setIsLoadingSuggestions(true)
+    const ipCoord = await locateUserByIP()
+    setIsLoadingSuggestions(false)
+    if (ipCoord) {
+      setSelectedPosition([ipCoord.lat, ipCoord.lng])
+      fillAddressFromCoords(ipCoord.lat, ipCoord.lng)
+    } else {
+      setAddressError("Não foi possível obter sua localização.")
+      setShowSuggestions(true)
+    }
   }
 
   function handleUseCurrentLocation() {
+    setAddressError('')
     if (!navigator.geolocation) {
-      alert('Geolocalização não disponível neste navegador.')
+      tryIPLocate()
       return
     }
 
+    setIsLoadingSuggestions(true)
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        setSelectedPosition([
-          position.coords.latitude,
-          position.coords.longitude,
-        ])
+        setIsLoadingSuggestions(false)
+        const lat = position.coords.latitude
+        const lng = position.coords.longitude
+        setSelectedPosition([lat, lng])
+        fillAddressFromCoords(lat, lng)
       },
       () => {
-        alert('Não foi possível obter sua localização.')
+        setIsLoadingSuggestions(false)
+        tryIPLocate()
       },
+      { enableHighAccuracy: true, timeout: 6000 }
     )
   }
 
@@ -210,13 +313,23 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
     onClose()
   }
 
+  const tileUrl = isDark
+    ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+    : "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+
+  const attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
+
   return (
-    <div className="modal-overlay">
-      <div className="modal-card modal-card--issue">
+    <div className="modal-overlay" style={{ backgroundColor: isDark ? 'rgba(0,0,0,0.6)' : 'rgba(17,24,39,0.28)' }} onClick={onClose}>
+      <div
+        className="modal-card modal-card--issue"
+        style={{ backgroundColor: cardBg, color: textColor }}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="modal-head">
           <div>
-            <h2 className="modal-title">Reportar ocorrência</h2>
-            <p className="modal-subtitle">
+            <h2 className="modal-title" style={{ color: textColor }}>Reportar ocorrência</h2>
+            <p className="modal-subtitle" style={{ color: mutedColor }}>
               Preencha as informações abaixo e marque o local no mapa, se quiser.
             </p>
           </div>
@@ -224,6 +337,7 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
           <button
             type="button"
             className="modal-close-button"
+            style={{ backgroundColor: isDark ? '#2a2a2e' : 'rgba(17,24,39,0.06)', color: textColor, borderColor: borderColor }}
             onClick={onClose}
             aria-label="Fechar modal"
           >
@@ -233,9 +347,10 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
 
         <form onSubmit={handleSubmit} className="form-grid issue-form-grid">
           <div className="form-field form-field--full">
-            <label className="form-label">Título *</label>
+            <label className="form-label" style={{ color: mutedColor }}>Título *</label>
             <input
               className="form-input"
+              style={{ backgroundColor: inputBg, color: textColor, borderColor: borderColor }}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Ex.: Falta de iluminação na rua"
@@ -244,9 +359,10 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
           </div>
 
           <div className="form-field form-field--full">
-            <label className="form-label">Descrição *</label>
+            <label className="form-label" style={{ color: mutedColor }}>Descrição *</label>
             <textarea
               className="form-textarea form-textarea--issue"
+              style={{ backgroundColor: inputBg, color: textColor, borderColor: borderColor }}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Explique o problema com clareza."
@@ -255,13 +371,17 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
           </div>
 
           <div className="form-field">
-            <label className="form-label">Endereço *</label>
+            <label className="form-label" style={{ color: mutedColor }}>Endereço *</label>
 
             <div className="address-search-box" ref={suggestionsBoxRef}>
-              <div className="address-input-wrap">
-                <MapPin size={16} />
+              <div
+                className="address-input-wrap"
+                style={{ backgroundColor: inputBg, borderColor: borderColor, color: textColor }}
+              >
+                <MapPin size={16} style={{ color: mutedColor }} />
                 <input
                   className="form-input form-input--with-icon"
+                  style={{ backgroundColor: 'transparent', color: textColor }}
                   value={address}
                   onChange={(e) => {
                     setAddress(e.target.value)
@@ -271,11 +391,14 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
                   placeholder="Ex.: Passagem Elvira, 191"
                   required
                 />
-                {isLoadingSuggestions ? <Loader2 size={16} className="spin" /> : null}
+                {isLoadingSuggestions ? <Loader2 size={16} className="spin" style={{ color: mutedColor }} /> : null}
               </div>
 
               {showSuggestions && (suggestions.length > 0 || addressError) ? (
-                <div className="address-suggestions">
+                <div
+                  className="address-suggestions"
+                  style={{ backgroundColor: cardBg, borderColor: borderColor }}
+                >
                   {addressError ? (
                     <div className="address-suggestion-item address-suggestion-item--error">
                       {addressError}
@@ -287,11 +410,12 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
                       key={suggestion.id}
                       type="button"
                       className="address-suggestion-item"
+                      style={{ backgroundColor: cardBg, borderBottomColor: borderColor }}
                       onClick={() => handleSelectSuggestion(suggestion)}
                     >
-                      <div className="address-suggestion-main">{suggestion.label}</div>
+                      <div className="address-suggestion-main" style={{ color: textColor }}>{suggestion.label}</div>
                       {suggestion.neighborhood ? (
-                        <div className="address-suggestion-sub">{suggestion.neighborhood}</div>
+                        <div className="address-suggestion-sub" style={{ color: mutedColor }}>{suggestion.neighborhood}</div>
                       ) : null}
                     </button>
                   ))}
@@ -302,6 +426,7 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
             <button
               type="button"
               className="location-link-button"
+              style={{ color: '#007aff' }}
               onClick={handleUseCurrentLocation}
             >
               Usar minha localização
@@ -309,9 +434,10 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
           </div>
 
           <div className="form-field">
-            <label className="form-label">Bairro *</label>
+            <label className="form-label" style={{ color: mutedColor }}>Bairro *</label>
             <input
               className="form-input"
+              style={{ backgroundColor: inputBg, color: textColor, borderColor: borderColor }}
               value={neighborhood}
               onChange={(e) => setNeighborhood(e.target.value)}
               placeholder="Ex.: Curió-Utinga"
@@ -323,34 +449,50 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
             <label className="form-label">Mapa</label>
 
             <div className="map-picker-card">
-              <MapContainer
-                center={selectedPosition ?? DEFAULT_CENTER}
-                zoom={13}
-                scrollWheelZoom
-                className="map-picker"
-              >
-                <TileLayer
-                  attribution='&copy; MapTiler &copy; OpenStreetMap contributors'
-                  url={`https://api.maptiler.com/maps/topo-v4/{z}/{x}/{y}.png?key=${import.meta.env.VITE_MAPTILER_API_KEY}`}
-                />
-
-                <MapViewportUpdater position={selectedPosition} />
-                <MapClickHandler onPick={handlePickOnMap} />
-
-                {selectedPosition ? <Marker position={selectedPosition} /> : null}
-              </MapContainer>
+              <div style={{ width: '100%', height: '280px', borderRadius: '12px', overflow: 'hidden', border: `1px solid ${isDark ? "#2a2a2a" : "#E8ECF0"}` }}>
+                <style>{`
+                  .leaflet-container {
+                    width: 100%;
+                    height: 100%;
+                    background: ${isDark ? "#1a1a1e" : "#f5f7fa"};
+                  }
+                  .leaflet-control-zoom {
+                    border: none !important;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.15) !important;
+                  }
+                  .leaflet-control-zoom-in, .leaflet-control-zoom-out {
+                    background-color: ${isDark ? "#2a2a2a !important" : "#ffffff !important"};
+                    color: ${isDark ? "#ffffff !important" : "#007aff !important"};
+                    border: 1px solid ${isDark ? "#3e3e3e" : "#e5e7eb"} !important;
+                  }
+                `}</style>
+                <MapContainer
+                  center={mapCenter}
+                  zoom={mapZoom}
+                  zoomControl={true}
+                  style={{ width: "100%", height: "100%" }}
+                >
+                  <MapFly center={mapCenter} zoom={mapZoom} />
+                  <MapEventsHandler onMapClick={handlePickOnMap} />
+                  <TileLayer url={tileUrl} attribution={attribution} />
+                  {selectedPosition && (
+                    <Marker position={selectedPosition} icon={markerIcon} />
+                  )}
+                </MapContainer>
+              </div>
             </div>
           </div>
 
           <div className="form-field">
-            <label className="form-label">Categoria</label>
+            <label className="form-label" style={{ color: mutedColor }}>Categoria</label>
             <select
               className="form-select"
+              style={{ backgroundColor: inputBg, color: textColor, borderColor: borderColor }}
               value={category}
               onChange={(e) => setCategory(e.target.value as CategoryOption)}
             >
               {CATEGORY_OPTIONS.map((item) => (
-                <option key={item} value={item}>
+                <option key={item} value={item} style={{ backgroundColor: cardBg, color: textColor }}>
                   {item}
                 </option>
               ))}
@@ -358,9 +500,10 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
           </div>
 
           <div className="form-field">
-            <label className="form-label">Urgência</label>
+            <label className="form-label" style={{ color: mutedColor }}>Urgência</label>
             <select
               className="form-select"
+              style={{ backgroundColor: inputBg, color: textColor, borderColor: borderColor }}
               value={severity}
               onChange={(e) => setSeverity(e.target.value as OccurrenceSeverity)}
             >
@@ -372,9 +515,10 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
 
           {category === 'Outros' ? (
             <div className="form-field form-field--full">
-              <label className="form-label">Explique melhor a categoria</label>
+              <label className="form-label" style={{ color: mutedColor }}>Explique melhor a categoria</label>
               <input
                 className="form-input"
+                style={{ backgroundColor: inputBg, color: textColor, borderColor: borderColor }}
                 value={otherCategory}
                 onChange={(e) => setOtherCategory(e.target.value)}
                 placeholder="Ex.: vazamento, risco elétrico, problema não listado..."
@@ -384,7 +528,7 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
           ) : null}
 
           <div className="form-field form-field--full">
-            <label className="form-label">Foto (opcional)</label>
+            <label className="form-label" style={{ color: mutedColor }}>Foto (opcional)</label>
 
             <label className="upload-box">
               <input
@@ -393,21 +537,53 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
                 className="upload-input-hidden"
                 onChange={(e) => {
                   const file = e.target.files?.[0]
-                  setSelectedFileName(file?.name ?? '')
+                  if (file) {
+                    setSelectedFileName(file.name)
+                    if (previewUrl) URL.revokeObjectURL(previewUrl)
+                    setPreviewUrl(URL.createObjectURL(file))
+                  } else {
+                    setSelectedFileName('')
+                    setPreviewUrl(null)
+                  }
                 }}
               />
 
-              <div className="upload-box-content">
-                <ImagePlus size={22} />
-                <span>
-                  {selectedFileName ? selectedFileName : 'Clique para selecionar foto'}
-                </span>
-              </div>
+              {previewUrl ? (
+                <div
+                  className="upload-box-preview"
+                  style={{
+                    backgroundColor: inputBg,
+                    borderColor: isDark ? '#38383e' : 'rgba(17,24,39,0.16)',
+                  }}
+                >
+                  <img
+                    src={previewUrl}
+                    alt="Preview da foto selecionada"
+                    className="upload-preview-img"
+                  />
+                  <div className="upload-preview-info">
+                    <span className="upload-preview-name" style={{ color: textColor }}>{selectedFileName}</span>
+                    <span className="upload-preview-change" style={{ color: '#007aff' }}>Trocar foto</span>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className="upload-box-content"
+                  style={{
+                    backgroundColor: inputBg,
+                    borderColor: isDark ? '#38383e' : 'rgba(17,24,39,0.16)',
+                    color: mutedColor
+                  }}
+                >
+                  <ImagePlus size={22} />
+                  <span>Clique para selecionar foto</span>
+                </div>
+              )}
             </label>
           </div>
 
           <div className="form-field form-field--full">
-            <label className="checkbox-row">
+            <label className="checkbox-row" style={{ color: textColor }}>
               <input
                 type="checkbox"
                 checked={anonymous}
@@ -418,7 +594,12 @@ function ReportIssueModal({ onClose, onCreate }: ReportIssueModalProps) {
           </div>
 
           <div className="modal-actions form-field--full">
-            <button type="button" className="secondary-button" onClick={onClose}>
+            <button
+              type="button"
+              className="secondary-button"
+              style={{ backgroundColor: isDark ? '#2a2a2e' : 'rgba(17,24,39,0.06)', color: textColor }}
+              onClick={onClose}
+            >
               Cancelar
             </button>
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   X,
   Upload,
@@ -10,23 +10,53 @@ import {
   Search,
 } from "lucide-react";
 import { supabase } from "../../lib/supabase";
-import {
-  MapContainer,
-  TileLayer,
-  Marker,
-  useMapEvents,
-} from "react-leaflet";
+import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import L from "leaflet";
+import { geocodeSingleAddress, reverseGeocode } from "../../services/geocoding";
 
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+// Custom blue pin marker for selection
+const markerIcon = L.divIcon({
+  html: `
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; transform: translateY(-15px);">
+      <svg width="32" height="38" viewBox="0 0 24 30" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0px 3px 4px rgba(0, 0, 0, 0.35));">
+        <path d="M12 0C5.37 0 0 5.37 0 12C0 21 12 30 12 30C12 30 24 21 24 12C24 5.37 18.63 0 12 0Z" fill="#1565C0"/>
+        <circle cx="12" cy="12" r="5" fill="white" />
+      </svg>
+    </div>
+  `,
+  className: "custom-leaflet-marker",
+  iconSize: [32, 38],
+  iconAnchor: [16, 38]
 });
+
+// Component to handle map clicks in Leaflet
+interface MapEventsHandlerProps {
+  onMapClick: (lat: number, lng: number) => void;
+}
+
+function MapEventsHandler({ onMapClick }: MapEventsHandlerProps) {
+  useMapEvents({
+    click(e) {
+      onMapClick(e.latlng.lat, e.latlng.lng);
+    },
+  });
+  return null;
+}
+
+// Component to fly map to coordinates programmatically
+interface MapFlyProps {
+  center: [number, number];
+  zoom: number;
+}
+
+function MapFly({ center, zoom }: MapFlyProps) {
+  const map = useMap();
+  useEffect(() => {
+    map.setView(center, zoom, { animate: true, duration: 1.2 });
+  }, [center, zoom, map]);
+  return null;
+}
 
 export type ReportModalInitialData = {
   title?: string;
@@ -137,25 +167,10 @@ const NEIGHBORHOODS = [
 
 type Severity = "critical" | "high" | "medium" | "low";
 
-const DEFAULT_CENTER: [number, number] = [-1.4558, -48.4902];
-
-function ClickToSetMarker({
-  coords,
-  onChange,
-}: {
-  coords: { lat: number; lng: number } | null;
-  onChange: (coords: { lat: number; lng: number }) => void;
-}) {
-  useMapEvents({
-    click(e) {
-      onChange({ lat: e.latlng.lat, lng: e.latlng.lng });
-    },
-  });
-
-  if (!coords) return null;
-
-  return <Marker position={[coords.lat, coords.lng]} />;
-}
+const DEFAULT_CENTER = {
+  longitude: -48.4902,
+  latitude: -1.4558,
+};
 
 export function ReportModal({
   darkMode,
@@ -173,10 +188,16 @@ export function ReportModal({
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
     null
   );
-  const [mapCenter, setMapCenter] =
-    useState<[number, number]>(DEFAULT_CENTER);
+  const [mapCenter, setMapCenter] = useState<[number, number]>([
+    DEFAULT_CENTER.latitude,
+    DEFAULT_CENTER.longitude,
+  ]);
+  const [mapZoom, setMapZoom] = useState<number>(12);
 
   const [file, setFile] = useState<File | null>(null);
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [formData, setFormData] = useState({
     title: "",
@@ -221,6 +242,12 @@ export function ReportModal({
   const textColor = darkMode ? "#FFFFFF" : "#1D1D1F";
   const mutedColor = darkMode ? "#888" : "#9CA3AF";
 
+  const tileUrl = darkMode
+    ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+    : "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+
+  const attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
+
   const handleChange = (field: string, value: string | boolean) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
   };
@@ -241,31 +268,19 @@ export function ReportModal({
     return "20–35";
   }, [formData.severity]);
 
-  async function geocodeAddress(address: string, neighborhood: string) {
-    const query = encodeURIComponent(
-      `${address}, ${neighborhood}, Belém, Pará, Brasil`
-    );
-
-    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${query}`;
-
-    const res = await fetch(url, {
-      headers: {
-        Accept: "application/json",
-      },
-    });
-
-    if (!res.ok) {
-      throw new Error("Falha ao buscar endereço no mapa.");
+  async function fillAddressFromCoords(lat: number, lng: number) {
+    const result = await reverseGeocode(lat, lng);
+    if (result) {
+      handleChange("address", result.address);
+      if (result.neighborhood) {
+        handleChange("neighborhood", result.neighborhood);
+      }
     }
+  }
 
-    const data = await res.json();
-
-    if (!data || data.length === 0) return null;
-
-    return {
-      lat: parseFloat(data[0].lat),
-      lng: parseFloat(data[0].lon),
-    };
+  function handlePickOnMap(lat: number, lng: number) {
+    setCoords({ lat, lng });
+    fillAddressFromCoords(lat, lng);
   }
 
   async function handleLocateOnMap() {
@@ -279,9 +294,8 @@ export function ReportModal({
     try {
       setSearchingLocation(true);
 
-      const result = await geocodeAddress(
-        formData.address.trim(),
-        formData.neighborhood.trim()
+      const result = await geocodeSingleAddress(
+        `${formData.address.trim()}, ${formData.neighborhood.trim()}`
       );
 
       if (!result) {
@@ -291,8 +305,10 @@ export function ReportModal({
         return;
       }
 
-      setCoords(result);
-      setMapCenter([result.lat, result.lng]);
+      const nextCoords = { lat: result.latitude, lng: result.longitude };
+      setCoords(nextCoords);
+      setMapCenter([result.latitude, result.longitude]);
+      setMapZoom(16);
     } catch (err: any) {
       setError(err?.message ?? "Não foi possível localizar no mapa.");
     } finally {
@@ -316,6 +332,7 @@ export function ReportModal({
         };
         setCoords(next);
         setMapCenter([next.lat, next.lng]);
+        setMapZoom(16);
       },
       () => {
         setError(
@@ -329,24 +346,29 @@ export function ReportModal({
   async function uploadPhotoIfAny(userId: string) {
     if (!file) return null;
 
-    const bucket = "issue-photos";
-    const ext = file.name.split(".").pop() || "jpg";
-    const path = `${userId}/${crypto.randomUUID()}.${ext}`;
+    setUploading(true);
+    try {
+      const bucket = "issue-photos";
+      const ext = file.name.split(".").pop() || "jpg";
+      const path = `${userId}/${crypto.randomUUID()}.${ext}`;
 
-    const { error: upErr } = await supabase.storage
-      .from(bucket)
-      .upload(path, file, {
-        cacheControl: "3600",
-        upsert: false,
-      });
+      const { error: upErr } = await supabase.storage
+        .from(bucket)
+        .upload(path, file, {
+          cacheControl: "3600",
+          upsert: false,
+        });
 
-    if (upErr) {
-      console.warn(upErr);
-      return null;
+      if (upErr) {
+        console.warn(upErr);
+        return null;
+      }
+
+      const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+      return data?.publicUrl ?? null;
+    } finally {
+      setUploading(false);
     }
-
-    const { data } = supabase.storage.from(bucket).getPublicUrl(path);
-    return data?.publicUrl ?? null;
   }
 
   async function handleSubmit() {
@@ -731,20 +753,35 @@ export function ReportModal({
                   className="rounded-xl overflow-hidden"
                   style={{ border: `1px solid ${borderColor}` }}
                 >
-                  <div className="h-[280px] w-full">
+                  <div className="h-[280px] w-full relative">
+                    <style>{`
+                      .leaflet-container {
+                        width: 100%;
+                        height: 100%;
+                        background: ${darkMode ? "#1a1a1e" : "#f5f7fa"};
+                      }
+                      .leaflet-control-zoom {
+                        border: none !important;
+                        box-shadow: 0 4px 12px rgba(0,0,0,0.15) !important;
+                      }
+                      .leaflet-control-zoom-in, .leaflet-control-zoom-out {
+                        background-color: ${darkMode ? "#2a2a2a !important" : "#ffffff !important"};
+                        color: ${darkMode ? "#ffffff !important" : "#007aff !important"};
+                        border: 1px solid ${darkMode ? "#3e3e3e" : "#e5e7eb"} !important;
+                      }
+                    `}</style>
                     <MapContainer
                       center={mapCenter}
-                      zoom={coords ? 16 : 12}
-                      scrollWheelZoom={true}
-                      className="w-full h-full"
-                      style={{ zIndex: 0 }}
-                      key={`${mapCenter[0]}-${mapCenter[1]}`}
+                      zoom={mapZoom}
+                      zoomControl={true}
+                      style={{ width: "100%", height: "100%" }}
                     >
-                      <TileLayer
-                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                      />
-                      <ClickToSetMarker coords={coords} onChange={setCoords} />
+                      <MapFly center={mapCenter} zoom={mapZoom} />
+                      <MapEventsHandler onMapClick={handlePickOnMap} />
+                      <TileLayer url={tileUrl} attribution={attribution} />
+                      {coords && (
+                        <Marker position={[coords.lat, coords.lng]} icon={markerIcon} />
+                      )}
                     </MapContainer>
                   </div>
                 </div>
@@ -799,32 +836,66 @@ export function ReportModal({
                   Fotografias / evidências (opcional)
                 </label>
 
-                <label
-                  className="w-full h-40 rounded-xl flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors"
-                  style={{
-                    backgroundColor: sectionBg,
-                    border: `2px dashed ${borderColor}`,
-                  }}
-                >
-                  <Upload size={20} color={mutedColor} />
-                  <p className="text-xs" style={{ color: mutedColor }}>
-                    Clique para enviar uma foto
-                  </p>
-                  <p style={{ fontSize: "10px", color: mutedColor }}>
-                    JPG/PNG até 10MB
-                  </p>
-                  {file && (
-                    <p className="text-xs" style={{ color: textColor, fontWeight: 600 }}>
-                      {file.name}
+                {photoPreview ? (
+                  <div className="relative rounded-xl overflow-hidden" style={{ border: `1px solid ${borderColor}` }}>
+                    <img
+                      src={photoPreview}
+                      alt="Preview"
+                      className="w-full object-cover"
+                      style={{ maxHeight: 200 }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFile(null);
+                        setPhotoPreview(null);
+                        if (fileInputRef.current) fileInputRef.current.value = "";
+                      }}
+                      className="absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center"
+                      style={{ backgroundColor: "rgba(0,0,0,0.55)", color: "#fff" }}
+                    >
+                      <X size={14} />
+                    </button>
+                    <div
+                      className="absolute bottom-0 left-0 right-0 px-3 py-2 text-xs"
+                      style={{ backgroundColor: "rgba(0,0,0,0.45)", color: "#fff" }}
+                    >
+                      {file?.name} &bull; {file ? (file.size / 1024).toFixed(0) + " KB" : ""}
+                    </div>
+                  </div>
+                ) : (
+                  <label
+                    className="w-full h-36 rounded-xl flex flex-col items-center justify-center gap-2 cursor-pointer transition-colors"
+                    style={{
+                      backgroundColor: sectionBg,
+                      border: `2px dashed ${borderColor}`,
+                    }}
+                  >
+                    <Upload size={20} color={mutedColor} />
+                    <p className="text-xs" style={{ color: mutedColor }}>
+                      Clique para enviar uma foto
                     </p>
-                  )}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                  />
-                </label>
+                    <p style={{ fontSize: "10px", color: mutedColor }}>
+                      JPG/PNG até 10MB
+                    </p>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const selected = e.target.files?.[0] ?? null;
+                        setFile(selected);
+                        if (selected) {
+                          const url = URL.createObjectURL(selected);
+                          setPhotoPreview(url);
+                        } else {
+                          setPhotoPreview(null);
+                        }
+                      }}
+                    />
+                  </label>
+                )}
               </div>
 
               <div
@@ -1014,20 +1085,20 @@ export function ReportModal({
             ) : (
               <button
                 onClick={handleSubmit}
-                className="h-10 px-6 rounded-xl text-sm"
+                className="h-10 px-6 rounded-xl text-sm flex items-center gap-2"
                 style={{
-                  backgroundColor: saving
+                  backgroundColor: saving || uploading
                     ? darkMode
                       ? "#2a2a2a"
                       : "#E8ECF0"
                     : "#2E7D32",
-                  color: saving ? mutedColor : "#fff",
+                  color: saving || uploading ? mutedColor : "#fff",
                   fontWeight: 600,
-                  cursor: saving ? "not-allowed" : "pointer",
+                  cursor: saving || uploading ? "not-allowed" : "pointer",
                 }}
-                disabled={saving}
+                disabled={saving || uploading}
               >
-                {saving ? "Enviando…" : "Enviar Ocorrência"}
+                {uploading ? "Enviando foto…" : saving ? "Registrando…" : "Enviar Ocorrência"}
               </button>
             )}
           </div>

@@ -83,7 +83,7 @@ function buildMissingFieldsLabel(fields: string[]) {
 }
 
 export function ChatWidget({
-  darkMode,
+  darkMode: _darkMode,
   currentUserName,
   onStartReport,
 }: ChatWidgetProps) {
@@ -101,18 +101,37 @@ export function ChatWidget({
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: createId(),
-      role: "assistant",
-      text: `Olá, ${currentUserName}! Eu sou o Assistente Urbano.\n\nPosso tirar dúvidas sobre o sistema ou ajudar você a registrar uma ocorrência de forma natural, como numa conversa.`,
-    },
-    {
-      id: createId(),
-      role: "assistant",
-      text: "Você pode me dizer algo como:\n• tem um poste sem luz na Alcindo Cacela\n• há um buraco grande no Marco\n• como funciona o apoio da comunidade?",
-    },
-  ]);
+  const STORAGE_KEY = `chat_history_${currentUserName}`;
+
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    try {
+      const saved = sessionStorage.getItem(STORAGE_KEY);
+      if (saved) return JSON.parse(saved) as ChatMessage[];
+    } catch {
+      // ignore
+    }
+    return [
+      {
+        id: createId(),
+        role: "assistant",
+        text: `Olá, ${currentUserName}! Eu sou o Assistente Urbano.\n\nPosso tirar dúvidas sobre o sistema ou ajudar você a registrar uma ocorrência de forma natural, como numa conversa.`,
+      },
+      {
+        id: createId(),
+        role: "assistant",
+        text: "Você pode me dizer algo como:\n• tem um poste sem luz na Alcindo Cacela\n• há um buraco grande no Marco\n• como funciona o apoio da comunidade?",
+      },
+    ];
+  });
+
+  // Persist messages to sessionStorage whenever they change
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+    } catch {
+      // ignore quota errors
+    }
+  }, [messages, STORAGE_KEY]);
 
   const quickActions = useMemo(
     () => [

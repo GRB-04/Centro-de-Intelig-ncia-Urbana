@@ -7,200 +7,242 @@ export interface AddressSuggestion {
   longitude: number
 }
 
-interface MapTilerContextItem {
-  id?: string
-  text?: string
-}
-
-interface MapTilerFeature {
-  id?: string
-  place_name?: string
-  text?: string
-  center?: [number, number]
-  properties?: {
-    neighbourhood?: string
-    municipality?: string
-    county?: string
-    region?: string
+// Search using Nominatim (OSM)
+async function searchAddressesNominatim(query: string): Promise<AddressSuggestion[]> {
+  let searchQuery = query
+  const lower = query.toLowerCase()
+  if (!lower.includes('belém') && !lower.includes('pará')) {
+    searchQuery += ', Belém, Pará'
   }
-  context?: MapTilerContextItem[]
-}
 
-interface MapTilerResponse {
-  features?: MapTilerFeature[]
-}
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(searchQuery)}&format=json&addressdetails=1&limit=6&countrycodes=br`
 
-const MAPTILER_API_KEY = import.meta.env.VITE_MAPTILER_API_KEY
-
-// Oeste, sul, leste, norte
-const BELEM_BBOX = [-48.75, -1.60, -48.30, -1.20]
-const BELEM_PROXIMITY = '-48.4902,-1.4558'
-
-function extractNeighborhood(feature: MapTilerFeature) {
-  const fromProperties =
-    feature.properties?.neighbourhood ||
-    feature.properties?.municipality ||
-    feature.properties?.county ||
-    feature.properties?.region
-
-  if (fromProperties) return fromProperties
-
-  const context = feature.context ?? []
-  const neighborhoodContext =
-    context.find((item) => item.id?.includes('neighbourhood')) ||
-    context.find((item) => item.id?.includes('suburb')) ||
-    context.find((item) => item.id?.includes('district')) ||
-    context.find((item) => item.id?.includes('locality')) ||
-    context.find((item) => item.id?.includes('place')) ||
-    context.find((item) => item.id?.includes('municipality')) ||
-    context.find((item) => item.id?.includes('county'))
-
-  return neighborhoodContext?.text ?? ''
-}
-
-function normalizeLabel(feature: MapTilerFeature) {
-  return feature.place_name ?? feature.text ?? 'Endereço encontrado'
-}
-
-function mapFeatures(features: MapTilerFeature[]): AddressSuggestion[] {
-  return features
-    .filter((feature) => Array.isArray(feature.center) && feature.center.length === 2)
-    .map((feature, index) => {
-      const [longitude, latitude] = feature.center as [number, number]
-
-      return {
-        id: feature.id ?? `${normalizeLabel(feature)}-${index}`,
-        label: normalizeLabel(feature),
-        address: normalizeLabel(feature),
-        neighborhood: extractNeighborhood(feature),
-        latitude,
-        longitude,
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'ZelaBelem-App/1.0'
       }
     })
+
+    if (!response.ok) return []
+    const data = await response.json()
+    if (!Array.isArray(data)) return []
+
+    const mapped = data.map((item: any, index: number) => {
+      const lat = parseFloat(item.lat)
+      const lon = parseFloat(item.lon)
+
+      const neighborhood =
+        item.address.suburb ||
+        item.address.neighbourhood ||
+        item.address.city_district ||
+        item.address.quarter ||
+        item.address.city ||
+        ''
+
+      const road = item.address.road || item.address.pedestrian || ''
+      const houseNumber = item.address.house_number || ''
+
+      const labelParts = []
+      if (road) {
+        labelParts.push(houseNumber ? `${road}, ${houseNumber}` : road)
+      } else {
+        labelParts.push(item.display_name.split(',')[0])
+      }
+      if (neighborhood) {
+        labelParts.push(neighborhood)
+      }
+      labelParts.push('Belém')
+
+      const friendlyLabel = labelParts.join(', ')
+
+      return {
+        id: item.place_id ? String(item.place_id) : `osm-${index}-${lat}-${lon}`,
+        label: friendlyLabel,
+        address: item.display_name,
+        neighborhood,
+        latitude: lat,
+        longitude: lon,
+      }
+    })
+
+    const seen = new Set<string>()
+    return mapped.filter((item: any) => {
+      if (!item) return false
+      const key = item.label.toLowerCase()
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  } catch (err) {
+    console.error('Erro no geocoding do Nominatim:', err)
+    return []
+  }
 }
 
-async function fetchSuggestions(url: string): Promise<AddressSuggestion[]> {
-  const response = await fetch(url)
+// Reverse geocoding using Nominatim (OSM)
+async function reverseGeocodeNominatim(latitude: number, longitude: number): Promise<AddressSuggestion | null> {
+  const url = `https://nominatim.openstreetmap.org/reverse?lat=${latitude}&lon=${longitude}&format=json&addressdetails=1`
 
-  if (!response.ok) {
-    throw new Error('Falha ao buscar sugestões de endereço.')
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'ZelaBelem-App/1.0'
+      }
+    })
+
+    if (!response.ok) return null
+    const item = await response.json()
+    if (!item || !item.address) return null
+
+    const neighborhood =
+      item.address.suburb ||
+      item.address.neighbourhood ||
+      item.address.city_district ||
+      item.address.quarter ||
+      item.address.city ||
+      ''
+
+    const road = item.address.road || item.address.pedestrian || ''
+    const houseNumber = item.address.house_number || ''
+
+    const labelParts = []
+    if (road) {
+      labelParts.push(houseNumber ? `${road}, ${houseNumber}` : road)
+    } else {
+      labelParts.push(item.display_name.split(',')[0])
+    }
+    if (neighborhood) {
+      labelParts.push(neighborhood)
+    }
+    labelParts.push('Belém')
+
+    const friendlyLabel = labelParts.join(', ')
+
+    return {
+      id: item.place_id ? String(item.place_id) : `reverse-${latitude}-${longitude}`,
+      label: friendlyLabel,
+      address: item.display_name,
+      neighborhood,
+      latitude,
+      longitude,
+    }
+  } catch (err) {
+    console.error('Erro no reverse geocoding do Nominatim:', err)
+    return null
   }
-
-  const data = (await response.json()) as MapTilerResponse
-  return mapFeatures(data.features ?? [])
 }
 
-function buildQueryVariants(rawQuery: string) {
-  const trimmed = rawQuery.trim()
-  const lower = trimmed.toLowerCase()
-
-  const variants = new Set<string>()
-
-  variants.add(trimmed)
-
-  if (!lower.includes('belém')) {
-    variants.add(`${trimmed}, Belém, Pará`)
-    variants.add(`${trimmed}, Belém`)
+async function geocodeSingleStreetCoords(query: string, cityFallback?: string): Promise<{ latitude: number; longitude: number } | null> {
+  const nominatimResults = await searchAddressesNominatim(query)
+  if (nominatimResults.length > 0) {
+    return {
+      latitude: nominatimResults[0].latitude,
+      longitude: nominatimResults[0].longitude
+    }
   }
-
-  if (!lower.includes('pará')) {
-    variants.add(`${trimmed}, Pará`)
+  
+  if (cityFallback) {
+    const fallbackResults = await searchAddressesNominatim(cityFallback)
+    if (fallbackResults.length > 0) {
+      return {
+        latitude: fallbackResults[0].latitude,
+        longitude: fallbackResults[0].longitude
+      }
+    }
   }
-
-  return [...variants]
-}
-
-function buildUrl(
-  query: string,
-  options?: {
-    exact?: boolean
-    broad?: boolean
-  },
-) {
-  const params = new URLSearchParams({
-    key: MAPTILER_API_KEY,
-    language: 'pt',
-    country: 'br',
-    proximity: BELEM_PROXIMITY,
-    bbox: BELEM_BBOX.join(','),
-  })
-
-  if (options?.exact) {
-    params.set('limit', '10')
-    params.set('types', 'address,street')
-    params.set('autocomplete', 'false')
-    params.set('fuzzyMatch', 'false')
-  } else if (options?.broad) {
-    params.set('limit', '8')
-    params.set('types', 'address,street,place,locality')
-    params.set('autocomplete', 'true')
-    params.set('fuzzyMatch', 'true')
-  } else {
-    params.set('limit', '6')
-    params.set('types', 'address,street')
-    params.set('autocomplete', 'true')
-    params.set('fuzzyMatch', 'true')
-  }
-
-  return `https://api.maptiler.com/geocoding/${encodeURIComponent(query)}.json?${params.toString()}`
-}
-
-function dedupeSuggestions(items: AddressSuggestion[]) {
-  const seen = new Set<string>()
-
-  return items.filter((item) => {
-    const key = `${item.label}|${item.latitude}|${item.longitude}`
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
+  return null
 }
 
 export async function searchAddresses(query: string): Promise<AddressSuggestion[]> {
   const trimmed = query.trim()
-
   if (!trimmed || trimmed.length < 3) {
     return []
   }
 
-  if (!MAPTILER_API_KEY) {
-    console.error('VITE_MAPTILER_API_KEY não foi definida.')
-    return []
-  }
+  let houseNumber = ""
+  let searchQuery = trimmed
 
-  const hasNumber = /\d/.test(trimmed)
-  const variants = buildQueryVariants(trimmed)
+  // 1. Check if the query contains a CEP
+  const cepMatch = trimmed.match(/\b(\d{5})-?(\d{3})\b/)
+  if (cepMatch) {
+    const cep = `${cepMatch[1]}${cepMatch[2]}`
+    const rest = trimmed.replace(/\b(\d{5})-?(\d{3})\b/, '').trim()
+    const houseNumberMatch = rest.match(/\b\d+\b/)
+    if (houseNumberMatch) {
+      houseNumber = houseNumberMatch[0]
+    }
 
-  if (hasNumber) {
-    const exactBuckets = await Promise.all(
-      variants.map((variant) => fetchSuggestions(buildUrl(variant, { exact: true }))),
-    )
-
-    const exactResults = dedupeSuggestions(exactBuckets.flat())
-
-    if (exactResults.length > 0) {
-      return exactResults
+    try {
+      const viaCepRes = await fetch(`https://viacep.com.br/ws/${cep}/json/`)
+      if (viaCepRes.ok) {
+        const viaCepData = await viaCepRes.json()
+        if (viaCepData && !viaCepData.erro && viaCepData.logradouro) {
+          const cleanStreetQuery = `${viaCepData.logradouro}, ${viaCepData.bairro}, ${viaCepData.localidade} - ${viaCepData.uf}`
+          const cityFallback = `${viaCepData.localidade} - ${viaCepData.uf}`
+          
+          const coords = await geocodeSingleStreetCoords(cleanStreetQuery, cityFallback)
+          const lat = coords ? coords.latitude : -1.4558
+          const lng = coords ? coords.longitude : -48.4902
+          
+          const labelParts = []
+          labelParts.push(houseNumber ? `${viaCepData.logradouro}, ${houseNumber}` : viaCepData.logradouro)
+          if (viaCepData.bairro) labelParts.push(viaCepData.bairro)
+          labelParts.push(`${viaCepData.localidade} - ${viaCepData.uf}`)
+          
+          return [{
+            id: `viacep-${cep}-${houseNumber || '0'}`,
+            label: labelParts.join(', '),
+            address: houseNumber ? `${viaCepData.logradouro}, ${houseNumber}` : viaCepData.logradouro,
+            neighborhood: viaCepData.bairro || '',
+            latitude: lat,
+            longitude: lng
+          }]
+        }
+      }
+    } catch (e) {
+      console.warn("Erro ao buscar no ViaCEP:", e)
     }
   }
 
-  const focusedBuckets = await Promise.all(
-    variants.map((variant) => fetchSuggestions(buildUrl(variant))),
-  )
-
-  const focusedResults = dedupeSuggestions(focusedBuckets.flat())
-
-  if (focusedResults.length > 0) {
-    return focusedResults
+  // 2. Extract house number at the end of the query
+  const numberMatch = trimmed.match(/(?:^|\s+|,\s*)(\d+)(?:\s*)$/)
+  if (numberMatch) {
+    houseNumber = numberMatch[1]
+    searchQuery = trimmed.replace(/(?:^|\s+|,\s*)\d+(?:\s*)$/, '').trim()
   }
 
-  const broadBuckets = await Promise.all(
-    variants.map((variant) => fetchSuggestions(buildUrl(variant, { broad: true }))),
-  )
+  if (searchQuery.length < 3) {
+    searchQuery = trimmed
+    houseNumber = ""
+  }
 
-  return dedupeSuggestions(broadBuckets.flat())
+  // 3. Search using Nominatim (OSM)
+  const results = await searchAddressesNominatim(searchQuery)
+
+  // 4. Inject house number back
+  if (houseNumber && results.length > 0) {
+    return results.map((item) => {
+      const parts = item.label.split(', ')
+      if (parts.length > 0) {
+        parts[0] = `${parts[0]}, ${houseNumber}`
+      }
+      return {
+        ...item,
+        label: parts.join(', '),
+        address: item.address.includes(houseNumber) ? item.address : `${item.address}, ${houseNumber}`
+      }
+    })
+  }
+
+  return results
 }
 
 export async function geocodeSingleAddress(query: string): Promise<AddressSuggestion | null> {
   const results = await searchAddresses(query)
   return results.length > 0 ? results[0] : null
+}
+
+export async function reverseGeocode(latitude: number, longitude: number): Promise<AddressSuggestion | null> {
+  return reverseGeocodeNominatim(latitude, longitude)
 }

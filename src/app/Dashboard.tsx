@@ -84,7 +84,7 @@ function getDisplayName(user: any) {
   return String(fullName).trim().split(" ")[0];
 }
 
-export default function Dashboard() {
+export default function Dashboard({ session: _session }: { session?: any }) {
   const [darkMode, setDarkMode] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [showReportModal, setShowReportModal] = useState(false);
@@ -383,7 +383,7 @@ export default function Dashboard() {
       />
 
       <main className="flex-1 flex flex-col max-w-[1600px] w-full mx-auto px-6 py-6 gap-6">
-        <MetricsPanel darkMode={darkMode} issues={issues} />
+        <MetricsPanel darkMode={darkMode} issues={issues} loading={loadingIssues} />
 
         <div className="flex justify-between items-center">
           <div className="flex items-center gap-2">
@@ -456,7 +456,7 @@ export default function Dashboard() {
               darkMode={darkMode}
               issues={filteredIssues}
               selectedIssue={selectedIssue}
-              onSelectIssue={(issue) => setSelectedIssue(issue as Issue)}
+              onSelectIssue={(issue) => setSelectedIssue(issue)}
             />
           )}
         </div>

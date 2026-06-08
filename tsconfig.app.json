@@ -21,5 +21,14 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": [
+    "src/app/components/ui",
+    "src/pages",
+    "src/components",
+    "src/data",
+    "src/types",
+    "src/styles",
+    "src/imports"
+  ]
 }

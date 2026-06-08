@@ -4,6 +4,7 @@ import type { Occurrence } from '../types/occurrence'
 interface OccurrenceCardProps {
   occurrence: Occurrence
   onSupport: (id: string) => void
+  isSupported?: boolean
 }
 
 function getTimeAgo(dateString: string) {
@@ -17,7 +18,7 @@ function getTimeAgo(dateString: string) {
   return `${diffDays} dias atrás`
 }
 
-function OccurrenceCard({ occurrence, onSupport }: OccurrenceCardProps) {
+function OccurrenceCard({ occurrence, onSupport, isSupported }: OccurrenceCardProps) {
   return (
     <div className="occurrence-card">
       <div className="occurrence-card-top">
@@ -51,9 +52,12 @@ function OccurrenceCard({ occurrence, onSupport }: OccurrenceCardProps) {
       <div className="occurrence-footer">
         <span className="category-badge">{occurrence.category}</span>
 
-        <button className="support-button" onClick={() => onSupport(occurrence.id)}>
+        <button 
+          className={`support-button${isSupported ? ' supported' : ''}`} 
+          onClick={() => onSupport(occurrence.id)}
+        >
           <ThumbsUp size={14} />
-          Apoiar
+          {isSupported ? 'Apoiado' : 'Apoiar'}
           <span className="support-count">{occurrence.supportCount}</span>
         </button>
       </div>

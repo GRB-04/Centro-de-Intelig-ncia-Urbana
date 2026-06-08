@@ -1,331 +1,447 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 
-type Mode = "signin" | "signup";
+type AuthMethod = "otp" | "password";
+type OtpStep = "email" | "code";
+type PasswordMode = "signin" | "signup";
 
-export default function Login() {
-  const [mode, setMode] = useState<Mode>("signin");
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+interface LoginProps {
+  onBypass: () => void;
+}
 
+export default function Login({ onBypass }: LoginProps) {
+  // ─── Auth method toggle ───────────────────────────────────────────────────
+  const [authMethod, setAuthMethod] = useState<AuthMethod>("otp");
+
+  // ─── OTP flow ────────────────────────────────────────────────────────────
+  const [otpStep, setOtpStep] = useState<OtpStep>("email");
+  const [otpEmail, setOtpEmail] = useState("");
+  const [otpDigits, setOtpDigits] = useState(["", "", "", "", "", ""]);
+  const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const [resendCooldown, setResendCooldown] = useState(0);
+
+  // ─── Password flow ───────────────────────────────────────────────────────
+  const [pwMode, setPwMode] = useState<PasswordMode>("signin");
+  const [pwName, setPwName] = useState("");
+  const [pwEmail, setPwEmail] = useState("");
+  const [pwPassword, setPwPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
 
+  // ─── Shared ───────────────────────────────────────────────────────────────
+  const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const canSubmit = useMemo(() => {
-    if (mode === "signup") {
-      return (
-        name.trim().length >= 2 &&
-        email.trim().length > 3 &&
-        password.length >= 6
-      );
-    }
-
-    return email.trim().length > 3 && password.length >= 6;
-  }, [mode, name, email, password]);
 
   function resetMessages() {
     setError(null);
     setSuccess(null);
   }
 
-  function validate() {
-    resetMessages();
+  // ─── Resend cooldown timer ─────────────────────────────────────────────
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const t = setTimeout(() => setResendCooldown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendCooldown]);
 
-    if (mode === "signup" && !name.trim()) {
-      setError("Digite seu nome.");
-      return false;
-    }
-
-    if (mode === "signup" && name.trim().length < 2) {
-      setError("Seu nome precisa ter pelo menos 2 caracteres.");
-      return false;
-    }
-
-    if (!email.trim()) {
-      setError("Digite seu email.");
-      return false;
-    }
-
-    if (!email.includes("@") || !email.includes(".")) {
-      setError("Digite um email válido.");
-      return false;
-    }
-
-    if (!password) {
-      setError("Digite sua senha.");
-      return false;
-    }
-
-    if (password.length < 6) {
-      setError("Sua senha precisa ter pelo menos 6 caracteres.");
-      return false;
-    }
-
-    return true;
-  }
-
-  async function handleAuth(e: React.FormEvent) {
+  // ─── OTP: send code ───────────────────────────────────────────────────────
+  async function handleSendOtp(e: React.FormEvent) {
     e.preventDefault();
-    if (!validate()) return;
-
-    try {
-      setLoading(true);
-      resetMessages();
-
-      if (mode === "signin") {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
-          password,
-        });
-
-        if (error) throw error;
-
-        setSuccess("✅ Login feito! Carregando seu painel…");
-      } else {
-        const cleanedName = name.trim();
-
-        const { data, error } = await supabase.auth.signUp({
-          email: email.trim(),
-          password,
-          options: {
-            emailRedirectTo: window.location.origin,
-            data: {
-              name: cleanedName,
-              full_name: cleanedName,
-              nome: cleanedName,
-            },
-          },
-        });
-
-        if (error) throw error;
-
-        if (data?.session) {
-          setSuccess("✅ Conta criada e login realizado!");
-        } else {
-          setSuccess(
-            "✅ Conta criada! Confira seu email para confirmar (se a confirmação estiver ativa)."
-          );
-        }
-      }
-    } catch (err: any) {
-      const msg = String(err?.message ?? "Não foi possível autenticar.");
-
-      if (msg.toLowerCase().includes("invalid login credentials")) {
-        setError("Email ou senha incorretos.");
-      } else if (msg.toLowerCase().includes("user already registered")) {
-        setError("Esse email já está cadastrado. Tente entrar.");
-      } else if (msg.toLowerCase().includes("email rate limit exceeded")) {
-        setError("Limite de emails do Supabase excedido. Tente mais tarde.");
-      } else {
-        setError(msg);
-      }
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function forgotPassword() {
     resetMessages();
 
-    if (!email.trim()) {
-      setError("Digite seu email para recuperar a senha.");
+    if (!otpEmail.trim() || !otpEmail.includes("@")) {
+      setError("Digite um email válido.");
       return;
     }
 
     try {
       setLoading(true);
-
-      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-        redirectTo: `${window.location.origin}/`,
+      const { error } = await supabase.auth.signInWithOtp({
+        email: otpEmail.trim(),
+        options: { shouldCreateUser: true },
       });
-
       if (error) throw error;
 
-      setSuccess("✅ Enviamos um link de recuperação para seu email.");
+      setOtpStep("code");
+      setResendCooldown(60);
+      setSuccess("📩 Código enviado! Confira sua caixa de entrada.");
     } catch (err: any) {
-      setError(err?.message ?? "Não foi possível enviar o link de recuperação.");
+      const msg = String(err?.message ?? "");
+      if (msg.toLowerCase().includes("rate limit")) {
+        setError("Muitas tentativas. Aguarde alguns minutos.");
+      } else {
+        setError(msg || "Não foi possível enviar o código.");
+      }
     } finally {
       setLoading(false);
     }
   }
 
-  return (
-    <div style={styles.page}>
-      <div style={styles.card}>
-        <div style={styles.logoWrap}>
-          <div style={styles.logo} />
-        </div>
+  // ─── OTP: verify code ─────────────────────────────────────────────────────
+  async function handleVerifyOtp(e: React.FormEvent) {
+    e.preventDefault();
+    resetMessages();
 
-        <h1 style={styles.title}>BelFlow</h1>
-        <p style={styles.subtitle}>
-          {mode === "signin"
+    const token = otpDigits.join("");
+    if (token.length < 6) {
+      setError("Digite todos os 6 dígitos do código.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const { error } = await supabase.auth.verifyOtp({
+        email: otpEmail.trim(),
+        token,
+        type: "email",
+      });
+      if (error) throw error;
+      setSuccess("✅ Acesso autorizado! Carregando painel…");
+    } catch (err: any) {
+      const msg = String(err?.message ?? "");
+      if (msg.toLowerCase().includes("invalid") || msg.toLowerCase().includes("expired")) {
+        setError("Código inválido ou expirado. Solicite um novo.");
+      } else {
+        setError(msg || "Não foi possível verificar o código.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ─── OTP digit inputs ─────────────────────────────────────────────────────
+  function handleDigitChange(index: number, value: string) {
+    const sanitized = value.replace(/\D/g, "").slice(-1);
+    const next = [...otpDigits];
+    next[index] = sanitized;
+    setOtpDigits(next);
+    if (sanitized && index < 5) {
+      otpRefs.current[index + 1]?.focus();
+    }
+  }
+
+  function handleDigitKeyDown(index: number, e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Backspace" && !otpDigits[index] && index > 0) {
+      otpRefs.current[index - 1]?.focus();
+    }
+  }
+
+  function handleDigitPaste(e: React.ClipboardEvent<HTMLInputElement>) {
+    e.preventDefault();
+    const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
+    if (!pasted) return;
+    const next = [...otpDigits];
+    for (let i = 0; i < 6; i++) next[i] = pasted[i] ?? "";
+    setOtpDigits(next);
+    const lastFilled = Math.min(pasted.length, 5);
+    otpRefs.current[lastFilled]?.focus();
+  }
+
+  // ─── Password flow submit ─────────────────────────────────────────────────
+  async function handlePasswordAuth(e: React.FormEvent) {
+    e.preventDefault();
+    resetMessages();
+
+    if (!pwEmail.trim() || !pwEmail.includes("@")) {
+      setError("Digite um email válido.");
+      return;
+    }
+    if (pwPassword.length < 6) {
+      setError("A senha precisa ter pelo menos 6 caracteres.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      if (pwMode === "signin") {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: pwEmail.trim(),
+          password: pwPassword,
+        });
+        if (error) throw error;
+        setSuccess("✅ Login feito! Carregando painel…");
+      } else {
+        const { data, error } = await supabase.auth.signUp({
+          email: pwEmail.trim(),
+          password: pwPassword,
+          options: {
+            emailRedirectTo: window.location.origin,
+            data: { name: pwName.trim(), full_name: pwName.trim() },
+          },
+        });
+        if (error) throw error;
+        if (data?.session) {
+          setSuccess("✅ Conta criada e login realizado!");
+        } else {
+          setSuccess("✅ Conta criada! Confirme seu email se necessário.");
+        }
+      }
+    } catch (err: any) {
+      const msg = String(err?.message ?? "");
+      if (msg.toLowerCase().includes("invalid login credentials")) {
+        setError("Email ou senha incorretos.");
+      } else if (msg.toLowerCase().includes("user already registered")) {
+        setError("Email já cadastrado. Tente entrar.");
+      } else if (msg.toLowerCase().includes("email rate limit")) {
+        setError("Limite de emails excedido. Tente mais tarde.");
+      } else {
+        setError(msg || "Não foi possível autenticar.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ─── Render ───────────────────────────────────────────────────────────────
+  return (
+    <div style={s.page}>
+      <div style={s.card}>
+        {/* Logo */}
+        <div style={s.logoWrap}>
+          <img src="/logo.jpg" alt="ZelaBelém" style={s.logo} />
+        </div>
+        <h1 style={s.title}>ZelaBelém</h1>
+        <p style={s.subtitle}>
+          {authMethod === "otp"
+            ? otpStep === "email"
+              ? "Informe seu email e receba um código de acesso."
+              : `Código enviado para ${otpEmail}`
+            : pwMode === "signin"
             ? "Entre com email e senha para acessar o painel."
-            : "Crie sua conta para registrar e acompanhar ocorrências urbanas."}
+            : "Crie sua conta para registrar ocorrências urbanas."}
         </p>
 
-        <div style={styles.tabs}>
+        {/* ── Method switcher ── */}
+        <div style={s.tabs}>
           <button
             type="button"
-            onClick={() => {
-              setMode("signin");
-              resetMessages();
-            }}
-            style={{
-              ...styles.tab,
-              ...(mode === "signin" ? styles.tabActive : {}),
-            }}
+            style={{ ...s.tab, ...(authMethod === "otp" ? s.tabActive : {}) }}
+            onClick={() => { setAuthMethod("otp"); resetMessages(); }}
           >
-            Entrar
+            Código por email
           </button>
-
           <button
             type="button"
-            onClick={() => {
-              setMode("signup");
-              resetMessages();
-            }}
-            style={{
-              ...styles.tab,
-              ...(mode === "signup" ? styles.tabActive : {}),
-            }}
+            style={{ ...s.tab, ...(authMethod === "password" ? s.tabActive : {}) }}
+            onClick={() => { setAuthMethod("password"); resetMessages(); }}
           >
-            Criar conta
+            Senha
           </button>
         </div>
 
-        <form onSubmit={handleAuth} style={styles.form}>
-          {mode === "signup" && (
-            <>
-              <label style={styles.label}>Nome</label>
+        {/* ════════════════════════ OTP FLOW ════════════════════════ */}
+        {authMethod === "otp" && (
+          <>
+            {otpStep === "email" ? (
+              <form onSubmit={handleSendOtp} style={s.form}>
+                <label style={s.label}>Email</label>
+                <input
+                  style={s.input}
+                  type="email"
+                  placeholder="voce@dominio.com"
+                  value={otpEmail}
+                  onChange={(e) => setOtpEmail(e.target.value)}
+                  autoComplete="email"
+                  required
+                />
+
+                <button
+                  style={{
+                    ...s.button,
+                    opacity: loading || !otpEmail.trim() ? 0.6 : 1,
+                    cursor: loading || !otpEmail.trim() ? "not-allowed" : "pointer",
+                  }}
+                  disabled={loading || !otpEmail.trim()}
+                >
+                  {loading ? "Enviando…" : "Enviar código"}
+                </button>
+
+                {success && <div style={s.success}>{success}</div>}
+                {error && <div style={s.error}>{error}</div>}
+                <div style={s.footnote}>Eixo 1 — Cidade, Mobilidade e Cidadania • Belém</div>
+              </form>
+            ) : (
+              <form onSubmit={handleVerifyOtp} style={s.form}>
+                {/* 6-digit OTP inputs */}
+                <label style={{ ...s.label, textAlign: "center" }}>
+                  Digite o código de 6 dígitos
+                </label>
+
+                <div style={s.otpRow}>
+                  {otpDigits.map((digit, i) => (
+                    <input
+                      key={i}
+                      ref={(el) => { otpRefs.current[i] = el; }}
+                      style={s.otpBox}
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={1}
+                      value={digit}
+                      onChange={(e) => handleDigitChange(i, e.target.value)}
+                      onKeyDown={(e) => handleDigitKeyDown(i, e)}
+                      onPaste={i === 0 ? handleDigitPaste : undefined}
+                      autoFocus={i === 0}
+                    />
+                  ))}
+                </div>
+
+                <button
+                  style={{
+                    ...s.button,
+                    opacity: loading || otpDigits.join("").length < 6 ? 0.6 : 1,
+                    cursor: loading || otpDigits.join("").length < 6 ? "not-allowed" : "pointer",
+                  }}
+                  disabled={loading || otpDigits.join("").length < 6}
+                >
+                  {loading ? "Verificando…" : "Verificar código"}
+                </button>
+
+                {/* Resend */}
+                <button
+                  type="button"
+                  style={{
+                    ...s.linkBtn,
+                    opacity: resendCooldown > 0 || loading ? 0.5 : 1,
+                    cursor: resendCooldown > 0 || loading ? "not-allowed" : "pointer",
+                  }}
+                  disabled={resendCooldown > 0 || loading}
+                  onClick={() => {
+                    setOtpDigits(["", "", "", "", "", ""]);
+                    resetMessages();
+                    setOtpStep("email");
+                  }}
+                >
+                  {resendCooldown > 0
+                    ? `Reenviar em ${resendCooldown}s`
+                    : "← Voltar e reenviar código"}
+                </button>
+
+                {success && <div style={s.success}>{success}</div>}
+                {error && <div style={s.error}>{error}</div>}
+                <div style={s.footnote}>Eixo 1 — Cidade, Mobilidade e Cidadania • Belém</div>
+              </form>
+            )}
+          </>
+        )}
+
+        {/* ════════════════════════ PASSWORD FLOW ════════════════════════ */}
+        {authMethod === "password" && (
+          <>
+            <div style={s.subTabs}>
+              <button
+                type="button"
+                style={{ ...s.subTab, ...(pwMode === "signin" ? s.subTabActive : {}) }}
+                onClick={() => { setPwMode("signin"); resetMessages(); }}
+              >
+                Entrar
+              </button>
+              <button
+                type="button"
+                style={{ ...s.subTab, ...(pwMode === "signup" ? s.subTabActive : {}) }}
+                onClick={() => { setPwMode("signup"); resetMessages(); }}
+              >
+                Criar conta
+              </button>
+            </div>
+
+            <form onSubmit={handlePasswordAuth} style={s.form}>
+              {pwMode === "signup" && (
+                <>
+                  <label style={s.label}>Nome</label>
+                  <input
+                    style={s.input}
+                    type="text"
+                    placeholder="Seu nome"
+                    value={pwName}
+                    onChange={(e) => setPwName(e.target.value)}
+                    autoComplete="name"
+                  />
+                </>
+              )}
+
+              <label style={s.label}>Email</label>
               <input
-                style={styles.input}
-                type="text"
-                placeholder="Seu nome"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                autoComplete="name"
+                style={s.input}
+                type="email"
+                placeholder="voce@dominio.com"
+                value={pwEmail}
+                onChange={(e) => setPwEmail(e.target.value)}
+                autoComplete="email"
               />
-            </>
-          )}
 
-          <label style={styles.label}>Email</label>
-          <input
-            style={styles.input}
-            type="email"
-            placeholder="voce@dominio.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            autoComplete="email"
-          />
+              <label style={{ ...s.label, marginTop: 4 }}>Senha</label>
+              <div style={s.passwordRow}>
+                <input
+                  style={{ ...s.input, margin: 0, flex: 1 }}
+                  type={showPassword ? "text" : "password"}
+                  placeholder="••••••"
+                  value={pwPassword}
+                  onChange={(e) => setPwPassword(e.target.value)}
+                  autoComplete={pwMode === "signin" ? "current-password" : "new-password"}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  style={s.eyeBtn}
+                  aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
+                >
+                  {showPassword ? "Ocultar" : "Mostrar"}
+                </button>
+              </div>
 
-          <label style={{ ...styles.label, marginTop: 6 }}>Senha</label>
+              <button
+                style={{
+                  ...s.button,
+                  opacity: loading ? 0.6 : 1,
+                  cursor: loading ? "not-allowed" : "pointer",
+                }}
+                disabled={loading}
+              >
+                {loading ? "Aguarde…" : pwMode === "signin" ? "Entrar" : "Criar conta"}
+              </button>
 
-          <div style={styles.passwordRow}>
-            <input
-              style={{ ...styles.input, margin: 0, flex: 1 }}
-              type={showPassword ? "text" : "password"}
-              placeholder="••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete={mode === "signin" ? "current-password" : "new-password"}
-            />
-
-            <button
-              type="button"
-              onClick={() => setShowPassword((s) => !s)}
-              style={styles.eyeBtn}
-              aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}
-            >
-              {showPassword ? "Ocultar" : "Mostrar"}
-            </button>
-          </div>
-
-          <button
-            style={{
-              ...styles.button,
-              opacity: loading || !canSubmit ? 0.6 : 1,
-              cursor: loading || !canSubmit ? "not-allowed" : "pointer",
-            }}
-            disabled={loading || !canSubmit}
-          >
-            {loading
-              ? "Aguarde…"
-              : mode === "signin"
-              ? "Entrar"
-              : "Criar conta"}
-          </button>
-
-          {mode === "signin" && (
-            <button
-              type="button"
-              onClick={forgotPassword}
-              style={styles.linkBtn}
-              disabled={loading}
-            >
-              Esqueci minha senha
-            </button>
-          )}
-
-          {success && <div style={styles.success}>{success}</div>}
-          {error && <div style={styles.error}>{error}</div>}
-
-          <div style={styles.footnote}>
-            Eixo 1 — Cidade, Mobilidade e Cidadania • Belém
-          </div>
-        </form>
+              {success && <div style={s.success}>{success}</div>}
+              {error && <div style={s.error}>{error}</div>}
+              <div style={s.footnote}>Eixo 1 — Cidade, Mobilidade e Cidadania • Belém</div>
+            </form>
+          </>
+        )}
       </div>
     </div>
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
+// ─── Styles ────────────────────────────────────────────────────────────────
+const s: Record<string, React.CSSProperties> = {
   page: {
     minHeight: "100vh",
     display: "grid",
     placeItems: "center",
-    background: "#0B0B0D",
+    background:
+      "linear-gradient(rgba(11,11,13,0.45),rgba(11,11,13,0.85)), url('/background.jpg') no-repeat center center fixed",
+    backgroundSize: "cover",
     color: "#fff",
     padding: 24,
-    fontFamily:
-      "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+    fontFamily: "'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif",
   },
   card: {
     width: "100%",
     maxWidth: 420,
-    background: "#111114",
-    border: "1px solid #232329",
+    background: "rgba(17,17,20,0.82)",
+    backdropFilter: "blur(20px)",
+    WebkitBackdropFilter: "blur(20px)",
+    border: "1px solid rgba(255,255,255,0.08)",
     borderRadius: 20,
     padding: 28,
-    boxShadow: "0 20px 60px rgba(0,0,0,.45)",
+    boxShadow: "0 24px 60px rgba(0,0,0,.65)",
     textAlign: "center",
   },
-  logoWrap: {
-    display: "grid",
-    placeItems: "center",
-    marginBottom: 12,
-  },
-  logo: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    background: "#FFFFFF",
-    opacity: 0.92,
-  },
-  title: {
-    margin: "6px 0 6px",
-    fontSize: 28,
-    fontWeight: 700,
-  },
-  subtitle: {
-    margin: "0 0 16px",
-    fontSize: 14,
-    color: "#A1A1AA",
-    lineHeight: 1.4,
-  },
+  logoWrap: { display: "grid", placeItems: "center", marginBottom: 12 },
+  logo: { width: 64, height: 64, borderRadius: 16, objectFit: "cover", boxShadow: "0 8px 24px rgba(0,0,0,.3)" },
+  title: { margin: "6px 0 6px", fontSize: 28, fontWeight: 700 },
+  subtitle: { margin: "0 0 16px", fontSize: 14, color: "#A1A1AA", lineHeight: 1.4 },
+
+  // Main method tabs
   tabs: {
     display: "grid",
     gridTemplateColumns: "1fr 1fr",
@@ -346,20 +462,29 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     cursor: "pointer",
   },
-  tabActive: {
-    background: "#16161B",
-    border: "1px solid #2A2A33",
-    color: "#FFFFFF",
-  },
-  form: {
+  tabActive: { background: "#16161B", border: "1px solid #2A2A33", color: "#FFFFFF" },
+
+  // Password sub-tabs
+  subTabs: {
     display: "grid",
-    gap: 10,
-    textAlign: "left",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 6,
+    marginBottom: 14,
   },
-  label: {
-    fontSize: 12,
+  subTab: {
+    height: 32,
+    borderRadius: 10,
+    border: "1px solid #232329",
+    background: "transparent",
     color: "#A1A1AA",
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
   },
+  subTabActive: { background: "#16161B", border: "1px solid #2A2A33", color: "#FFFFFF" },
+
+  form: { display: "grid", gap: 10, textAlign: "left" },
+  label: { fontSize: 12, color: "#A1A1AA" },
   input: {
     width: "100%",
     padding: "12px 14px",
@@ -369,12 +494,9 @@ const styles: Record<string, React.CSSProperties> = {
     color: "#fff",
     outline: "none",
     fontSize: 14,
+    boxSizing: "border-box",
   },
-  passwordRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-  },
+  passwordRow: { display: "flex", alignItems: "center", gap: 8 },
   eyeBtn: {
     height: 44,
     padding: "0 12px",
@@ -387,6 +509,29 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     whiteSpace: "nowrap",
   },
+
+  // OTP digit boxes
+  otpRow: {
+    display: "flex",
+    justifyContent: "center",
+    gap: 10,
+    margin: "8px 0",
+  },
+  otpBox: {
+    width: 48,
+    height: 56,
+    borderRadius: 14,
+    border: "1px solid #2A2A33",
+    background: "#0E0E12",
+    color: "#fff",
+    fontSize: 22,
+    fontWeight: 700,
+    textAlign: "center",
+    outline: "none",
+    caretColor: "#0A84FF",
+    transition: "border-color 0.2s",
+  },
+
   button: {
     marginTop: 8,
     padding: "12px 14px",
@@ -429,10 +574,5 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 13,
     textAlign: "center",
   },
-  footnote: {
-    marginTop: 10,
-    fontSize: 12,
-    color: "#7C7C88",
-    textAlign: "center",
-  },
+  footnote: { marginTop: 10, fontSize: 12, color: "#7C7C88", textAlign: "center" },
 };

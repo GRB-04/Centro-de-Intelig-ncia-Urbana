@@ -64,6 +64,157 @@ function normalizeIssueDraft(input?: IssueDraft): IssueDraft {
   };
 }
 
+function localChatbotFallback(
+  userMessage: string,
+  currentDraft: IssueDraft,
+  currentUserName?: string
+): ChatbotStructuredResponse {
+  const normalizedMsg = userMessage
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, ""); // remove accents
+
+  const draft = { ...currentDraft };
+
+  // 1. Detect Category
+  if (!draft.category) {
+    if (/\b(agua|vazamento|cano|falta d'agua|abastecimento|hidrometro)\b/.test(normalizedMsg)) {
+      draft.category = "Abastecimento de Água";
+    } else if (/\b(arvore|galho|folha|praca|meio ambiente|poda|plantar|verde|jardim)\b/.test(normalizedMsg)) {
+      draft.category = "Arborização e Meio Ambiente";
+    } else if (/\b(calcada|pedestre|acessibilidade|cadeirante|rampa|obstaculo|passarela|meio-fio)\b/.test(normalizedMsg)) {
+      draft.category = "Calçadas e Acessibilidade";
+    } else if (/\b(patrimonio|monumento|historico|museu|estatua|igreja|teatro|casarao|ruina)\b/.test(normalizedMsg)) {
+      draft.category = "Conservação do Patrimônio";
+    } else if (/\b(alagamento|enchente|bueiro|boca de lobo|inundacao|alagado|chuva|canal|enxurrada)\b/.test(normalizedMsg)) {
+      draft.category = "Drenagem e Alagamentos";
+    } else if (/\b(esgoto|saneamento|fossa|catinga|cheiro ruim|dejeto|esgoto a ceu aberto)\b/.test(normalizedMsg)) {
+      draft.category = "Esgoto e Saneamento";
+    } else if (/\b(iluminacao|poste|apagado|lampada|escura|escuro|breu|sem luz)\b/.test(normalizedMsg)) {
+      draft.category = "Iluminação Pública";
+    } else if (/\b(lixo|entulho|saco|lixeira|sujeira|descarte|coleta|entulho|despejo|sacos de lixo)\b/.test(normalizedMsg)) {
+      draft.category = "Resíduos Sólidos";
+    } else if (/\b(seguranca|assalto|roubo|policia|guardas|vandalismo|pichacao|pichado|droga|assaltos)\b/.test(normalizedMsg)) {
+      draft.category = "Segurança Urbana / Espaço Público";
+    } else if (/\b(sinalizacao|semaforo|sinal|placa|faixa de pedestre|faixa|radar)\b/.test(normalizedMsg)) {
+      draft.category = "Sinalização de Trânsito";
+    } else if (/\b(buraco|asfalto|cratera|pista|rua|pavimento|remendo|buracos|via|piso)\b/.test(normalizedMsg)) {
+      draft.category = "Vias e Pavimentação";
+    }
+  }
+
+  // 2. Detect Neighborhood in Belém
+  const neighborhoods = [
+    "Batista Campos", "Nazaré", "Umarizal", "Marco", "Pedreira", "Reduto", 
+    "Cidade Velha", "Campina", "Jurunas", "Guamá", "Cremação", "Condor", 
+    "Telégrafo", "Sacramenta", "Barreiro", "Marambaia", "Val-de-Cans", 
+    "Souza", "Bengui", "Tapanã", "Coqueiro", "Una", "Tenoné", "Icoaraci", 
+    "Outeiro", "Cotijuba", "Mosqueiro"
+  ];
+
+  if (!draft.neighborhood) {
+    for (const nh of neighborhoods) {
+      const normalizedNh = nh
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+      const regex = new RegExp(`\\b${normalizedNh}\\b`, "i");
+      if (regex.test(normalizedMsg)) {
+        draft.neighborhood = nh;
+        break;
+      }
+    }
+  }
+
+  // 3. Detect Address
+  if (!draft.address) {
+    const streetRegex = /(?:na rua|na av|na avenida|na travessa|na tv|no endereco|na trav|no beco|passagem|travessa|avenida|rua)\s+([a-zA-Z0-9ºª\s\-]+?)(?:,|$| no bairro| em | perto| proximo| de | da | do )/i;
+    const match = userMessage.match(streetRegex);
+    if (match && match[1] && match[1].trim().length > 3) {
+      draft.address = match[1].trim();
+    } else {
+      // Look for street words directly if no preposition
+      const directRegex = /\b(rua|avenida|av\.|travessa|tv\.|passagem|beco)\s+([a-zA-Z0-9ºª\s\-]+?)(?:,|$| no bairro| em | perto| proximo| de | da | do )/i;
+      const matchDirect = userMessage.match(directRegex);
+      if (matchDirect && matchDirect[0]) {
+        draft.address = matchDirect[0].trim();
+      }
+    }
+  }
+
+  // 4. Set Description and Title
+  if (!draft.description) {
+    draft.description = userMessage;
+  }
+  if (!draft.title && draft.category) {
+    // Make a short, pretty title
+    let type = "Problema";
+    if (draft.category === "Vias e Pavimentação") type = "Buraco ou Pavimentação danificada";
+    else if (draft.category === "Iluminação Pública") type = "Poste sem iluminação";
+    else if (draft.category === "Resíduos Sólidos") type = "Acúmulo inadequado de lixo";
+    else if (draft.category === "Drenagem e Alagamentos") type = "Alagamento na via";
+    else if (draft.category === "Calçadas e Acessibilidade") type = "Calçada inacessível/danificada";
+    
+    draft.title = draft.neighborhood ? `${type} no bairro ${draft.neighborhood}` : `${type} detectado`;
+  } else if (!draft.title) {
+    draft.title = "Ocorrência relatada por Assistente";
+  }
+
+  // 5. Detect Severity
+  if (!draft.severity) {
+    if (/\b(urgente|perigo|perigoso|critico|acidente|risco|morrer|grave)\b/.test(normalizedMsg)) {
+      draft.severity = "critical";
+    } else if (/\b(ruim|preocupante|alta|complicado|feio)\b/.test(normalizedMsg)) {
+      draft.severity = "high";
+    } else if (/\b(medio|regular|normal|aceitavel)\b/.test(normalizedMsg)) {
+      draft.severity = "medium";
+    } else if (/\b(leve|baixa|pouco|tranquilo)\b/.test(normalizedMsg)) {
+      draft.severity = "low";
+    } else {
+      draft.severity = "medium";
+    }
+  }
+
+  // 6. Detect Anonymous
+  if (draft.anonymous === undefined) {
+    if (/\b(anonimo|sem nome|oculto|esconder|privado|secreto)\b/.test(normalizedMsg)) {
+      draft.anonymous = true;
+    }
+  }
+
+  // Determine mode, missing fields and readiness
+  const isReport = !!(draft.category || draft.neighborhood || draft.address || draft.description);
+  
+  const missingFields: string[] = [];
+  if (!draft.category) missingFields.push("category");
+  if (!draft.neighborhood) missingFields.push("neighborhood");
+  if (!draft.address) missingFields.push("address");
+  if (!draft.description) missingFields.push("description");
+  
+  const readyToSubmit = !!(draft.category && draft.neighborhood && draft.address && draft.description);
+
+  let reply = "";
+  if (readyToSubmit) {
+    reply = `Perfeito, ${currentUserName || "Usuário"}! Consegui reunir todas as informações cruciais (categoria, bairro, endereço e descrição). Por favor, revise o rascunho abaixo e clique em 'Relatar agora' para oficializar sua ocorrência!`;
+  } else if (!draft.category) {
+    reply = `Olá! Sou o Zé. Entendi que você deseja relatar um problema urbano em Belém. Poderia me dizer qual a categoria ou tipo do problema (ex: buraco na rua, vazamento de água, falta de luz)?`;
+  } else if (!draft.neighborhood || !draft.address) {
+    const catMsg = draft.category ? `sobre ${draft.category}` : "";
+    reply = `Legal, anotei o problema ${catMsg}. Agora, para que possamos localizar e atuar, onde exatamente isso está acontecendo? Por favor, me informe a rua e o bairro correspondentes.`;
+  } else {
+    reply = `Entendi as informações! Só preciso de mais alguns detalhes sobre o problema para descrevê-lo da melhor forma possível. Pode me dar uma breve descrição?`;
+  }
+
+  return {
+    mode: isReport ? "report" : "help",
+    reply,
+    detectedIssue: isReport,
+    issueData: draft,
+    missingFields,
+    readyToSubmit
+  };
+}
+
 export async function sendMessageToChatbot(params: {
   userMessage: string;
   history: ChatHistoryMessage[];
@@ -71,14 +222,12 @@ export async function sendMessageToChatbot(params: {
   currentUserName?: string;
 }): Promise<ChatbotStructuredResponse> {
   const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+  const normalizedDraft = normalizeIssueDraft(params.currentDraft);
 
   if (!apiKey) {
-    throw new Error(
-      "A chave da Groq não foi encontrada. Verifique se o arquivo .env contém VITE_GROQ_API_KEY."
-    );
+    console.warn("Groq API key not found in .env. Falling back to local NLP.");
+    return localChatbotFallback(params.userMessage, normalizedDraft, params.currentUserName);
   }
-
-  const normalizedDraft = normalizeIssueDraft(params.currentDraft);
 
   const systemPrompt = `
 Você é o Assistente Urbano do sistema "Belém Urban Intelligence Dashboard".
@@ -179,50 +328,57 @@ Formato obrigatório:
     },
   ];
 
-  const response = await fetch(GROQ_API_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.3,
-      max_tokens: 900,
-      response_format: { type: "json_object" },
-      messages,
-    }),
-  });
+  try {
+    const response = await fetch(GROQ_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        temperature: 0.3,
+        max_tokens: 900,
+        response_format: { type: "json_object" },
+        messages,
+      }),
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Erro ao consultar Groq: ${errorText}`);
+    if (!response.ok) {
+      console.warn("Groq API error. Falling back to local NLP.");
+      return localChatbotFallback(params.userMessage, normalizedDraft, params.currentUserName);
+    }
+
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content;
+
+    if (!content || typeof content !== "string") {
+      console.warn("Empty Groq content. Falling back to local NLP.");
+      return localChatbotFallback(params.userMessage, normalizedDraft, params.currentUserName);
+    }
+
+    const parsed = safeJsonParse(content);
+
+    if (!parsed) {
+      console.warn("Failed to parse Groq response JSON. Falling back to local NLP.");
+      return localChatbotFallback(params.userMessage, normalizedDraft, params.currentUserName);
+    }
+
+    return {
+      mode: parsed.mode === "report" ? "report" : "help",
+      reply:
+        typeof parsed.reply === "string" && parsed.reply.trim()
+          ? parsed.reply.trim()
+          : "Desculpe, não consegui entender totalmente. Pode me explicar de outra forma?",
+      detectedIssue: Boolean(parsed.detectedIssue),
+      issueData: normalizeIssueDraft(parsed.issueData),
+      missingFields: Array.isArray(parsed.missingFields)
+        ? parsed.missingFields.filter((item): item is string => typeof item === "string")
+        : [],
+      readyToSubmit: Boolean(parsed.readyToSubmit),
+    };
+  } catch (err) {
+    console.warn("Network error or fetch failed. Falling back to local NLP:", err);
+    return localChatbotFallback(params.userMessage, normalizedDraft, params.currentUserName);
   }
-
-  const data = await response.json();
-  const content = data?.choices?.[0]?.message?.content;
-
-  if (!content || typeof content !== "string") {
-    throw new Error("A resposta da IA veio vazia.");
-  }
-
-  const parsed = safeJsonParse(content);
-
-  if (!parsed) {
-    throw new Error("Não foi possível interpretar a resposta estruturada da IA.");
-  }
-
-  return {
-    mode: parsed.mode === "report" ? "report" : "help",
-    reply:
-      typeof parsed.reply === "string" && parsed.reply.trim()
-        ? parsed.reply.trim()
-        : "Desculpe, não consegui entender totalmente. Pode me explicar de outra forma?",
-    detectedIssue: Boolean(parsed.detectedIssue),
-    issueData: normalizeIssueDraft(parsed.issueData),
-    missingFields: Array.isArray(parsed.missingFields)
-      ? parsed.missingFields.filter((item): item is string => typeof item === "string")
-      : [],
-    readyToSubmit: Boolean(parsed.readyToSubmit),
-  };
 }

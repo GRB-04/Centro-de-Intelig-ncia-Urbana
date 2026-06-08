@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import {
   ThumbsUp,
@@ -140,6 +140,8 @@ export function IssueList(props: IssueListProps) {
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
   const [neighborhood, setNeighborhood] = useState("Todos os Bairros");
   const [pendingVotes, setPendingVotes] = useState<Set<string>>(new Set());
+  const itemRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   const neighborhoods = useMemo(() => {
     const set = new Set<string>();
@@ -154,6 +156,17 @@ export function IssueList(props: IssueListProps) {
   const getIsSupported = (issueId: string) => votedByMe.has(issueId);
 
   const getVotes = (issueId: string) => voteCounts[issueId] ?? 0;
+
+  // Dynamic threshold: top 25% by vote count (min 1 vote)
+  const mostVotedThreshold = useMemo(() => {
+    const sortedVotes = issues
+      .map((i) => voteCounts[i.id] ?? 0)
+      .filter((v) => v > 0)
+      .sort((a, b) => b - a);
+    if (sortedVotes.length === 0) return 1;
+    const top25Index = Math.max(0, Math.floor(sortedVotes.length * 0.25) - 1);
+    return sortedVotes[top25Index] ?? 1;
+  }, [issues, voteCounts]);
 
   const filtered = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -179,11 +192,28 @@ export function IssueList(props: IssueListProps) {
         (activeTab === "critical" &&
           normalizeSeverity(issue.severity) === "critical") ||
         (activeTab === "recurrent" && isRecurrent) ||
-        (activeTab === "most-voted" && votes >= 150);
+        (activeTab === "most-voted" && votes >= mostVotedThreshold);
 
       return matchesSearch && matchesNeighborhood && matchesTab;
     });
-  }, [issues, searchQuery, neighborhood, activeTab, recurrentSet, voteCounts]);
+  }, [issues, searchQuery, neighborhood, activeTab, recurrentSet, voteCounts, mostVotedThreshold]);
+
+  // Tab counts
+  const tabCounts = useMemo(() => ({
+    all: issues.length,
+    critical: issues.filter((i) => normalizeSeverity(i.severity) === "critical").length,
+    recurrent: issues.filter((i) => recurrentSet.has(`${i.category}::${i.neighborhood ?? ""}`)).length,
+    "most-voted": issues.filter((i) => (voteCounts[i.id] ?? 0) >= mostVotedThreshold).length,
+  }), [issues, recurrentSet, voteCounts, mostVotedThreshold]);
+
+  // Scroll to selected issue
+  useEffect(() => {
+    if (!selectedIssueId) return;
+    const el = itemRefs.current[selectedIssueId];
+    if (el && listRef.current) {
+      el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [selectedIssueId]);
 
   const tabs: { id: FilterTab; label: string }[] = [
     { id: "all", label: "Todas" },
@@ -191,6 +221,7 @@ export function IssueList(props: IssueListProps) {
     { id: "recurrent", label: "Recorrentes" },
     { id: "most-voted", label: "Mais Votadas" },
   ];
+
 
   const handleSupport = async (
     e: MouseEvent<HTMLButtonElement>,
@@ -258,29 +289,38 @@ export function IssueList(props: IssueListProps) {
         </div>
       </div>
 
-      <div className="flex gap-1 mb-3">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className="px-3 h-8 rounded-xl text-xs transition-all"
-            style={{
-              backgroundColor:
-                activeTab === tab.id
-                  ? "#1565C0"
-                  : darkMode
-                  ? "#2a2a2a"
-                  : "#F5F7FA",
-              color: activeTab === tab.id ? "#fff" : darkMode ? "#888" : "#6B7280",
-              fontWeight: activeTab === tab.id ? 600 : 400,
-              border: `1px solid ${
-                activeTab === tab.id ? "#1565C0" : darkMode ? "#333" : "#E8ECF0"
-              }`,
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
+      <div className="flex gap-1 mb-3 flex-wrap">
+        {tabs.map((tab) => {
+          const count = tabCounts[tab.id];
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className="flex items-center gap-1.5 px-3 h-8 rounded-xl text-xs transition-all"
+              style={{
+                backgroundColor: isActive ? "#1565C0" : darkMode ? "#2a2a2a" : "#F5F7FA",
+                color: isActive ? "#fff" : darkMode ? "#888" : "#6B7280",
+                fontWeight: isActive ? 600 : 400,
+                border: `1px solid ${isActive ? "#1565C0" : darkMode ? "#333" : "#E8ECF0"}`,
+              }}
+            >
+              {tab.label}
+              <span
+                className="text-[10px] px-1.5 py-0.5 rounded-full"
+                style={{
+                  backgroundColor: isActive ? "rgba(255,255,255,0.25)" : darkMode ? "#333" : "#E8ECF0",
+                  color: isActive ? "#fff" : darkMode ? "#666" : "#9CA3AF",
+                  fontWeight: 700,
+                  minWidth: 16,
+                  textAlign: "center",
+                }}
+              >
+                {count}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="mb-4 relative">
@@ -315,15 +355,32 @@ export function IssueList(props: IssueListProps) {
       </div>
 
       <div
+        ref={listRef}
         className="flex flex-col gap-3 overflow-y-auto flex-1 pr-1"
         style={{ scrollbarWidth: "thin" }}
       >
         {!loading && filtered.length === 0 && (
-          <div
-            className="text-center py-12 text-sm"
-            style={{ color: darkMode ? "#555" : "#9CA3AF" }}
-          >
-            Nenhuma ocorrência encontrada
+          <div className="flex flex-col items-center justify-center py-16 text-center gap-3">
+            <div
+              className="w-16 h-16 rounded-full flex items-center justify-center text-2xl"
+              style={{ backgroundColor: darkMode ? "#2a2a2a" : "#F5F7FA" }}
+            >
+              {activeTab === "critical" ? "⚠️" : activeTab === "recurrent" ? "🔄" : activeTab === "most-voted" ? "👍" : "📋"}
+            </div>
+            <p className="text-sm font-semibold" style={{ color: darkMode ? "#ccc" : "#374151" }}>
+              {activeTab === "critical"
+                ? "Nenhuma ocorrência crítica"
+                : activeTab === "recurrent"
+                ? "Nenhuma ocorrência recorrente"
+                : activeTab === "most-voted"
+                ? "Nenhuma ocorrência votada ainda"
+                : "Nenhuma ocorrência encontrada"}
+            </p>
+            <p className="text-xs" style={{ color: darkMode ? "#555" : "#9CA3AF" }}>
+              {activeTab === "most-voted"
+                ? "Vote nas ocorrências para que apareçam aqui."
+                : "Tente ajustar os filtros ou a busca."}
+            </p>
           </div>
         )}
 
@@ -353,6 +410,7 @@ export function IssueList(props: IssueListProps) {
             return (
               <div
                 key={issue.id}
+                ref={(el) => { itemRefs.current[issue.id] = el; }}
                 onClick={() => onSelectIssue(issue)}
                 className="rounded-2xl overflow-hidden cursor-pointer transition-all"
                 style={{
