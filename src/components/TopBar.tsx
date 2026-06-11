@@ -36,7 +36,7 @@ function TopBar({
   return (
     <header className="topbar">
       <div className="topbar-left">
-        <img src="/logo.jpg" alt="ZelaBelém Logo" className="brand-logo" />
+        <img src="/logo.png" alt="ZelaBelém Logo" className="brand-logo" />
 
         <div>
           <h1 className="brand-title">ZelaBelém</h1>
