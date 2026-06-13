@@ -13,10 +13,12 @@ import MetricCard from '../components/MetricCard'
 import OccurrenceList from '../components/OccurrenceList'
 import OccurrenceMap from '../components/OccurrenceMap'
 import ReportIssueModal from '../components/ReportIssueModal'
+import OccurrenceDetailModal from '../components/OccurrenceDetailModal'
 import UrbanAssistantChat from '../components/UrbanAssistantChat'
 import { mockOccurrences } from '../data/mockOccurrences'
 import type { Occurrence } from '../types/occurrence'
 import { supabase, isSupabaseConfigured } from '../lib/supabase'
+import type { AdminSession } from '../app/Login'
 
 function getMostFrequentCategory(occurrences: Occurrence[]) {
   const counter = new Map<string, number>()
@@ -57,10 +59,14 @@ function getAverageResolutionDays(occurrences: Occurrence[]) {
 
 interface DashboardProps {
   session?: any
+  adminSession?: AdminSession | null
+  onAdminLogout?: () => void
 }
 
-function Dashboard({ session }: DashboardProps) {
+function Dashboard({ session, adminSession, onAdminLogout }: DashboardProps) {
+  const isAdmin = !!(adminSession?.isAdmin)
   const currentUserId = session?.user?.id ?? null
+
   const [search, setSearch] = useState('')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [isChatOpen, setIsChatOpen] = useState(false)
@@ -68,8 +74,10 @@ function Dashboard({ session }: DashboardProps) {
   const [votedByMe, setVotedByMe] = useState<Set<string>>(new Set())
   const [theme, setTheme] = useState<'light' | 'dark'>('dark')
   const [prefilledData, setPrefilledData] = useState<any>(null)
+  const [selectedMapOccurrence, setSelectedMapOccurrence] = useState<Occurrence | null>(null)
 
   const currentUserName = useMemo(() => {
+    if (isAdmin) return 'Administrador'
     if (!session?.user) return 'Convidado'
     const metadata = session.user.user_metadata ?? {}
     const fullName =
@@ -79,9 +87,13 @@ function Dashboard({ session }: DashboardProps) {
       session.user.email?.split('@')[0] ||
       'Gabriel'
     return String(fullName).trim().split(' ')[0]
-  }, [session])
+  }, [session, isAdmin])
 
   async function handleLogout() {
+    if (isAdmin && onAdminLogout) {
+      onAdminLogout()
+      return
+    }
     if (isSupabaseConfigured) {
       await supabase!.auth.signOut()
     } else {
@@ -149,6 +161,7 @@ function Dashboard({ session }: DashboardProps) {
             createdAt: db.created_at,
             supportCount: votesMap[String(db.id)] ?? 0,
             anonymous: db.anonymous ?? false,
+            imageUrl: db.photo_url ?? undefined,
           }
         })
 
@@ -170,12 +183,20 @@ function Dashboard({ session }: DashboardProps) {
     const localCounts = localStorage.getItem('zelabelem_vote_counts')
     const countsMap = localCounts ? JSON.parse(localCounts) : {}
 
+    // Load persisted status overrides from admin
+    const savedStatuses = localStorage.getItem('zelabelem_status_overrides')
+    const statusOverrides: Record<string, Occurrence['status']> = savedStatuses
+      ? JSON.parse(savedStatuses)
+      : {}
+
     const loaded = mockOccurrences.map((item) => {
       const added = votesSet.has(item.id) ? 1 : 0
       const baseCount = countsMap[item.id] !== undefined ? countsMap[item.id] : item.supportCount
       return {
         ...item,
         supportCount: baseCount + added,
+        // Apply status override if admin changed it
+        status: statusOverrides[item.id] ?? item.status,
       }
     })
 
@@ -185,6 +206,24 @@ function Dashboard({ session }: DashboardProps) {
 
   useEffect(() => {
     loadData()
+
+    if (isSupabaseConfigured) {
+      const channel = supabase!
+        .channel('schema-db-changes')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'issues' },
+          () => {
+            console.log('Realtime change received on issues')
+            loadData()
+          }
+        )
+        .subscribe()
+
+      return () => {
+        channel.unsubscribe()
+      }
+    }
   }, [currentUserId])
 
   const filteredOccurrences = useMemo(() => {
@@ -279,6 +318,47 @@ function Dashboard({ session }: DashboardProps) {
     }
   }
 
+  // ─── Admin: change occurrence status ──────────────────────────────────────
+  async function handleChangeStatus(id: string, newStatus: Occurrence['status']) {
+    // Optimistic update
+    setOccurrences((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, status: newStatus } : item))
+    )
+
+    if (isSupabaseConfigured) {
+      try {
+        // Map display status to DB status
+        let dbStatus = 'aberto'
+        if (newStatus === 'em análise') dbStatus = 'em_analise'
+        else if (newStatus === 'resolvida') dbStatus = 'resolvido'
+
+        const { data, error } = await supabase!
+          .from('issues')
+          .update({ status: dbStatus })
+          .eq('id', id)
+          .select()
+
+        if (error) throw error
+        if (!data || data.length === 0) {
+          throw new Error('Permissão negada ou ocorrência não encontrada no banco de dados.')
+        }
+      } catch (err: any) {
+        console.error('Erro ao atualizar status no Supabase:', err)
+        alert(`Não foi possível atualizar o status no banco de dados: ${err.message || err}`)
+        // Revert on error
+        await loadData()
+      }
+    } else {
+      // Persist status override in localStorage for mock data
+      const savedStatuses = localStorage.getItem('zelabelem_status_overrides')
+      const statusOverrides: Record<string, Occurrence['status']> = savedStatuses
+        ? JSON.parse(savedStatuses)
+        : {}
+      statusOverrides[id] = newStatus
+      localStorage.setItem('zelabelem_status_overrides', JSON.stringify(statusOverrides))
+    }
+  }
+
   async function handleCreateOccurrence(newOccurrence: Occurrence) {
     setOccurrences((prev) => [newOccurrence, ...prev])
 
@@ -300,7 +380,7 @@ function Dashboard({ session }: DashboardProps) {
           lat: newOccurrence.latitude,
           lng: newOccurrence.longitude,
           user_id: currentUserId,
-          photo_url: null,
+          photo_url: newOccurrence.imageUrl || null,
         }
 
         const { error } = await supabase!.from('issues').insert(payload)
@@ -328,9 +408,16 @@ function Dashboard({ session }: DashboardProps) {
         onToggleTheme={() => setTheme((prev) => (prev === 'light' ? 'dark' : 'light'))}
         userName={currentUserName}
         onLogout={handleLogout}
+        isAdmin={isAdmin}
       />
 
       <main className="page-shell">
+        {isAdmin && (
+          <div className="admin-banner">
+            🛡️ Você está no <strong>Modo Administrador</strong> — Gerencie os status das ocorrências abaixo.
+          </div>
+        )}
+
         <div className="metrics-grid">
           <MetricCard
             title="Ocorrências ativas"
@@ -379,6 +466,9 @@ function Dashboard({ session }: DashboardProps) {
               occurrences={filteredOccurrences}
               onSupport={handleSupport}
               votedByMe={votedByMe}
+              isAdmin={isAdmin}
+              onChangeStatus={handleChangeStatus}
+              theme={theme}
             />
           </section>
 
@@ -391,33 +481,44 @@ function Dashboard({ session }: DashboardProps) {
             </div>
 
             <div className="map-panel-body">
-              <OccurrenceMap occurrences={filteredOccurrences} theme={theme} />
+              <OccurrenceMap
+                occurrences={filteredOccurrences}
+                theme={theme}
+                onSupport={handleSupport}
+                votedByMe={votedByMe}
+                isAdmin={isAdmin}
+                onChangeStatus={handleChangeStatus}
+                onMarkerClick={(occurrence) => setSelectedMapOccurrence(occurrence)}
+              />
             </div>
           </section>
         </div>
       </main>
 
-      <div className="floating-actions">
-        <button
-          type="button"
-          className="chat-fab"
-          onClick={() => setIsChatOpen((prev) => !prev)}
-          aria-label="Abrir chat"
-        >
-          <MessageCircle size={18} />
-        </button>
+      {/* Admin cannot report occurrences — only citizens */}
+      {!isAdmin && (
+        <div className="floating-actions">
+          <button
+            type="button"
+            className="chat-fab"
+            onClick={() => setIsChatOpen((prev) => !prev)}
+            aria-label="Abrir chat"
+          >
+            <MessageCircle size={18} />
+          </button>
 
-        <button
-          type="button"
-          className="floating-button"
-          onClick={() => setIsModalOpen(true)}
-        >
-          <Plus size={18} />
-          Reportar ocorrência
-        </button>
-      </div>
+          <button
+            type="button"
+            className="floating-button"
+            onClick={() => setIsModalOpen(true)}
+          >
+            <Plus size={18} />
+            Reportar ocorrência
+          </button>
+        </div>
+      )}
 
-      {isChatOpen ? (
+      {isChatOpen && !isAdmin ? (
         <UrbanAssistantChat
           onClose={() => setIsChatOpen(false)}
           onStartReport={handleStartReport}
@@ -425,7 +526,7 @@ function Dashboard({ session }: DashboardProps) {
         />
       ) : null}
 
-      {isModalOpen ? (
+      {isModalOpen && !isAdmin ? (
         <ReportIssueModal
           onClose={() => {
             setIsModalOpen(false)
@@ -436,6 +537,19 @@ function Dashboard({ session }: DashboardProps) {
           theme={theme}
         />
       ) : null}
+
+      {/* Detail modal opened when clicking a map pin */}
+      {selectedMapOccurrence && (
+        <OccurrenceDetailModal
+          occurrence={selectedMapOccurrence}
+          onClose={() => setSelectedMapOccurrence(null)}
+          onSupport={handleSupport}
+          isSupported={votedByMe.has(selectedMapOccurrence.id)}
+          isAdmin={isAdmin}
+          onChangeStatus={handleChangeStatus}
+          theme={theme}
+        />
+      )}
     </div>
   )
 }

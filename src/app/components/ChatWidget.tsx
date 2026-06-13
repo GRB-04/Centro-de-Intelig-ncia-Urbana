@@ -4,10 +4,13 @@ import {
   Send,
   X,
   Bot,
-  Sparkles,
   Loader2,
   Mic,
   MicOff,
+  MapPin,
+  CheckCircle2,
+  RotateCcw,
+  ChevronRight,
 } from "lucide-react";
 import type { ReportModalInitialData } from "./ReportModal";
 import {
@@ -42,8 +45,8 @@ type SpeechRecognitionLike = {
 
 declare global {
   interface Window {
-    SpeechRecognition?: new () => SpeechRecognitionLike;
-    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+    SpeechRecognition?: any;
+    webkitSpeechRecognition?: any;
   }
 }
 
@@ -67,19 +70,27 @@ function mergeDrafts(currentDraft: IssueDraft | null, nextDraft: IssueDraft): Is
   };
 }
 
-function buildMissingFieldsLabel(fields: string[]) {
-  const labels: Record<string, string> = {
-    title: "título",
-    category: "categoria",
-    otherCategory: "tipo do problema",
-    neighborhood: "bairro",
-    address: "endereço ou referência",
-    description: "descrição",
-    severity: "urgência",
-    anonymous: "anonimato",
-  };
+function severityPtLabel(severity?: string) {
+  if (severity === "critical") return "🔴 Crítica";
+  if (severity === "high") return "🟠 Alta";
+  if (severity === "medium") return "🟡 Média";
+  if (severity === "low") return "🟢 Baixa";
+  return "—";
+}
 
-  return fields.map((field) => labels[field] || field);
+// Detect if assistant message is asking about location
+function isAskingLocation(text: string): boolean {
+  const lower = text.toLowerCase();
+  return (
+    lower.includes("endereço") ||
+    lower.includes("bairro") ||
+    lower.includes("onde") ||
+    lower.includes("localização") ||
+    lower.includes("local") ||
+    lower.includes("localiza") ||
+    lower.includes("rua") ||
+    lower.includes("região")
+  );
 }
 
 export function ChatWidget({
@@ -91,17 +102,17 @@ export function ChatWidget({
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [issueDraft, setIssueDraft] = useState<IssueDraft | null>(null);
-  const [detectedIssue, setDetectedIssue] = useState(false);
   const [readyToSubmit, setReadyToSubmit] = useState(false);
-  const [missingFields, setMissingFields] = useState<string[]>([]);
   const [isRecording, setIsRecording] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
+  const [locatingUser, setLocatingUser] = useState(false);
+  const [showLocationBtn, setShowLocationBtn] = useState(false);
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  const STORAGE_KEY = `chat_history_${currentUserName}`;
+  const STORAGE_KEY = `chat_history_v2_${currentUserName}`;
 
   const [messages, setMessages] = useState<ChatMessage[]>(() => {
     try {
@@ -114,17 +125,12 @@ export function ChatWidget({
       {
         id: createId(),
         role: "assistant",
-        text: `Olá, ${currentUserName}! Eu sou o Assistente Urbano.\n\nPosso tirar dúvidas sobre o sistema ou ajudar você a registrar uma ocorrência de forma natural, como numa conversa.`,
-      },
-      {
-        id: createId(),
-        role: "assistant",
-        text: "Você pode me dizer algo como:\n• tem um poste sem luz na Alcindo Cacela\n• há um buraco grande no Marco\n• como funciona o apoio da comunidade?",
+        text: `Olá, ${currentUserName}! 👋 Sou o Zé, assistente do ZelaBelém.\n\nMe conta: qual problema urbano você está vendo? Pode descrever com suas próprias palavras.`,
       },
     ];
   });
 
-  // Persist messages to sessionStorage whenever they change
+  // Persist messages to sessionStorage
   useEffect(() => {
     try {
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
@@ -135,13 +141,14 @@ export function ChatWidget({
 
   const quickActions = useMemo(
     () => [
-      "Como registrar uma ocorrência?",
-      "Tem um poste sem luz na Alcindo Cacela",
-      "Há um buraco grande no Marco",
+      "Tem um poste apagado na minha rua",
+      "Há um buraco grande no asfalto",
+      "Acúmulo de lixo no bairro",
     ],
     []
   );
 
+  // Speech recognition setup
   useEffect(() => {
     const SpeechRecognitionCtor =
       window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -152,7 +159,6 @@ export function ChatWidget({
     }
 
     setSpeechSupported(true);
-
     const recognition = new SpeechRecognitionCtor();
     recognition.lang = "pt-BR";
     recognition.interimResults = true;
@@ -169,27 +175,22 @@ export function ChatWidget({
 
     recognition.onerror = (event: any) => {
       setIsRecording(false);
-
       if (event?.error === "not-allowed") {
         setMicError("Permissão de microfone negada no navegador.");
         return;
       }
-
       if (event?.error === "no-speech") {
-        setMicError("Não consegui ouvir sua fala. Tente novamente.");
+        setMicError("Não consegui ouvir. Tente novamente.");
         return;
       }
-
       setMicError("Não foi possível usar o microfone agora.");
     };
 
     recognition.onresult = (event: any) => {
       let transcript = "";
-
       for (let i = event.resultIndex; i < event.results.length; i++) {
         transcript += event.results[i][0].transcript;
       }
-
       setInput(transcript.trim());
     };
 
@@ -201,37 +202,104 @@ export function ChatWidget({
     };
   }, []);
 
+  // Auto-scroll
   useEffect(() => {
     if (!open) return;
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [messages, loading, open, detectedIssue, missingFields, issueDraft]);
+  }, [messages, loading, open, readyToSubmit]);
 
   function pushMessage(message: ChatMessage) {
     setMessages((prev) => [...prev, message]);
   }
 
-  function resetIssueState() {
+  function resetConversation() {
     setIssueDraft(null);
-    setDetectedIssue(false);
     setReadyToSubmit(false);
-    setMissingFields([]);
+    setShowLocationBtn(false);
+    setMessages([
+      {
+        id: createId(),
+        role: "assistant",
+        text: `Tudo certo! Me conta: qual problema urbano você está vendo?`,
+      },
+    ]);
+    try {
+      sessionStorage.removeItem(STORAGE_KEY);
+    } catch {}
   }
 
-  function openPrefilledReport() {
-    if (!issueDraft) return;
+  // Use GPS / IP location to fill address
+  async function handleUseMyLocation() {
+    setLocatingUser(true);
 
-    onStartReport({
-      title: issueDraft.title || "",
-      category: issueDraft.category || "",
-      otherCategory: issueDraft.otherCategory || "",
-      neighborhood: issueDraft.neighborhood || "",
-      address: issueDraft.address || "",
-      description: issueDraft.description || "",
-      severity: issueDraft.severity || "medium",
-      anonymous: issueDraft.anonymous ?? false,
-    });
+    const fillFromCoords = async (lat: number, lng: number) => {
+      try {
+        // Try reverse geocoding via Nominatim
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&accept-language=pt`,
+          { headers: { "Accept-Language": "pt-BR,pt;q=0.9" } }
+        );
+        const data = await res.json();
+        const address = data?.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+        const neighborhood =
+          data?.address?.suburb ||
+          data?.address?.neighbourhood ||
+          data?.address?.city_district ||
+          "";
 
-    setOpen(false);
+        const locationText = neighborhood
+          ? `${address.split(",")[0]}, ${neighborhood}`
+          : address.split(",").slice(0, 2).join(",");
+
+        // Send as user message
+        await handleSend(`Minha localização atual: ${locationText} (lat: ${lat.toFixed(5)}, lng: ${lng.toFixed(5)})`);
+      } catch {
+        await handleSend(`Minha localização: lat ${lat.toFixed(5)}, lng ${lng.toFixed(5)}`);
+      } finally {
+        setLocatingUser(false);
+        setShowLocationBtn(false);
+      }
+    };
+
+    const tryIP = async () => {
+      try {
+        const res = await fetch("https://ipapi.co/json/");
+        const data = await res.json();
+        if (typeof data.latitude === "number" && typeof data.longitude === "number") {
+          await fillFromCoords(data.latitude, data.longitude);
+          return;
+        }
+      } catch {}
+      try {
+        const res = await fetch("https://ip-api.com/json/");
+        const data = await res.json();
+        if (typeof data.lat === "number" && typeof data.lon === "number") {
+          await fillFromCoords(data.lat, data.lon);
+          return;
+        }
+      } catch {}
+      setLocatingUser(false);
+      pushMessage({
+        id: createId(),
+        role: "assistant",
+        text: "Não consegui obter sua localização automaticamente. Pode me dizer o endereço ou bairro?",
+      });
+    };
+
+    if (!navigator.geolocation) {
+      await tryIP();
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        await fillFromCoords(pos.coords.latitude, pos.coords.longitude);
+      },
+      async () => {
+        await tryIP();
+      },
+      { enableHighAccuracy: true, timeout: 6000 }
+    );
   }
 
   async function handleSend(forcedText?: string) {
@@ -262,21 +330,18 @@ export function ChatWidget({
         currentUserName,
       });
 
+      // Merge draft data
       const mergedDraft = mergeDrafts(issueDraft, response.issueData || {});
       const hasMeaningfulDraft =
         Boolean(mergedDraft.title) ||
         Boolean(mergedDraft.category) ||
-        Boolean(mergedDraft.neighborhood) ||
-        Boolean(mergedDraft.address) ||
         Boolean(mergedDraft.description);
 
       if (response.detectedIssue && hasMeaningfulDraft) {
         setIssueDraft(mergedDraft);
-        setDetectedIssue(true);
       }
 
       setReadyToSubmit(Boolean(response.readyToSubmit));
-      setMissingFields(response.missingFields || []);
 
       pushMessage({
         id: createId(),
@@ -284,42 +349,11 @@ export function ChatWidget({
         text: response.reply,
       });
 
-      if (response.detectedIssue && hasMeaningfulDraft) {
-        const fieldsText = buildMissingFieldsLabel(response.missingFields || []);
-
-        const summaryLines = [
-          "Resumo do que já entendi:",
-          `• Título: ${mergedDraft.title || "Ainda não definido"}`,
-          `• Categoria: ${mergedDraft.category || "Ainda não definida"}`,
-          `• Bairro: ${mergedDraft.neighborhood || "Ainda não informado"}`,
-          `• Endereço: ${mergedDraft.address || "Ainda não informado"}`,
-          `• Urgência: ${
-            mergedDraft.severity === "critical"
-              ? "Crítica"
-              : mergedDraft.severity === "high"
-              ? "Alta"
-              : mergedDraft.severity === "medium"
-              ? "Média"
-              : mergedDraft.severity === "low"
-              ? "Baixa"
-              : "Ainda não definida"
-          }`,
-        ];
-
-        if (fieldsText.length > 0) {
-          summaryLines.push("", `Ainda faltam: ${fieldsText.join(", ")}.`);
-        } else if (response.readyToSubmit) {
-          summaryLines.push(
-            "",
-            "Já tenho informação suficiente para abrir a ocorrência preenchida."
-          );
-        }
-
-        pushMessage({
-          id: createId(),
-          role: "assistant",
-          text: summaryLines.join("\n"),
-        });
+      // Show location button if assistant is asking about location
+      if (isAskingLocation(response.reply)) {
+        setShowLocationBtn(true);
+      } else {
+        setShowLocationBtn(false);
       }
     } catch (error: any) {
       pushMessage({
@@ -327,7 +361,7 @@ export function ChatWidget({
         role: "assistant",
         text:
           error?.message ||
-          "Desculpe, tive um problema ao falar com a IA agora. Tente novamente.",
+          "Desculpe, tive um problema agora. Tente novamente.",
       });
     } finally {
       setLoading(false);
@@ -346,20 +380,40 @@ export function ChatWidget({
       setMicError("Seu navegador não suporta transcrição por voz.");
       return;
     }
-
     if (!recognitionRef.current) {
       setMicError("Não foi possível inicializar o microfone.");
       return;
     }
-
     setMicError(null);
-
     if (isRecording) {
       recognitionRef.current.stop();
       return;
     }
-
     recognitionRef.current.start();
+  }
+
+  function handlePublish() {
+    if (!issueDraft) return;
+    onStartReport({
+      title: issueDraft.title || "",
+      category: issueDraft.category || "",
+      otherCategory: issueDraft.otherCategory || "",
+      neighborhood: issueDraft.neighborhood || "",
+      address: issueDraft.address || "",
+      description: issueDraft.description || "",
+      severity: issueDraft.severity || "medium",
+      anonymous: issueDraft.anonymous ?? false,
+    });
+    setOpen(false);
+  }
+
+  function handleCorrect() {
+    setReadyToSubmit(false);
+    pushMessage({
+      id: createId(),
+      role: "assistant",
+      text: "Claro! O que você gostaria de corrigir? Me diga o que mudou.",
+    });
   }
 
   return (
@@ -369,17 +423,18 @@ export function ChatWidget({
           className="fixed bottom-24 right-6 z-[1500] overflow-hidden flex flex-col"
           style={{
             width: 360,
-            height: 560,
+            height: 580,
             borderRadius: 24,
             backgroundColor: "#F81F39",
-            boxShadow: "0 20px 60px rgba(0,0,0,0.28)",
+            boxShadow: "0 20px 60px rgba(0,0,0,0.30)",
             border: "1px solid rgba(255,255,255,0.12)",
           }}
         >
+          {/* Header */}
           <div
             className="flex items-center justify-between px-4 py-3 shrink-0"
             style={{
-              backgroundColor: "rgba(255,255,255,0.24)",
+              backgroundColor: "rgba(255,255,255,0.22)",
               borderBottom: "1px solid rgba(255,255,255,0.12)",
             }}
           >
@@ -394,62 +449,80 @@ export function ChatWidget({
               <div>
                 <div
                   className="text-sm"
-                  style={{ color: "#111", fontWeight: 700, lineHeight: 1.1 }}
+                  style={{ color: "#fff", fontWeight: 700, lineHeight: 1.1 }}
                 >
-                  Assistente
+                  Assistente Zé
                 </div>
                 <div
-                  className="text-xs"
-                  style={{ color: "rgba(255,255,255,0.95)" }}
+                  className="text-xs flex items-center gap-1"
+                  style={{ color: "rgba(255,255,255,0.90)" }}
                 >
-                  Online • {currentUserName}
+                  <span
+                    style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: "50%",
+                      backgroundColor: "#4ade80",
+                      display: "inline-block",
+                    }}
+                  />
+                  Online • ZelaBelém
                 </div>
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setOpen(false)}
-              className="w-8 h-8 rounded-full flex items-center justify-center"
-              style={{
-                backgroundColor: "rgba(255,255,255,0.15)",
-                color: "#fff",
-              }}
-            >
-              <X size={16} />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={resetConversation}
+                title="Reiniciar conversa"
+                className="w-8 h-8 rounded-full flex items-center justify-center"
+                style={{
+                  backgroundColor: "rgba(255,255,255,0.15)",
+                  color: "rgba(255,255,255,0.80)",
+                }}
+              >
+                <RotateCcw size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="w-8 h-8 rounded-full flex items-center justify-center"
+                style={{
+                  backgroundColor: "rgba(255,255,255,0.15)",
+                  color: "#fff",
+                }}
+              >
+                <X size={16} />
+              </button>
+            </div>
           </div>
 
+          {/* Messages area */}
           <div
             className="px-3 py-3 overflow-y-auto flex-1 min-h-0"
-            style={{
-              backgroundColor: "#F81F39",
-            }}
+            style={{ backgroundColor: "#F81F39" }}
           >
             {messages.map((message) => (
               <div
                 key={message.id}
-                className={`mb-3 flex ${
+                className={`mb-2 flex ${
                   message.role === "user" ? "justify-end" : "justify-start"
                 }`}
               >
                 <div
                   style={{
                     maxWidth: "84%",
-                    borderRadius: 18,
-                    padding: "12px 14px",
+                    borderRadius: message.role === "user" ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
+                    padding: "10px 14px",
                     whiteSpace: "pre-line",
                     fontSize: 13,
-                    lineHeight: 1.45,
+                    lineHeight: 1.5,
                     backgroundColor:
                       message.role === "user"
                         ? "rgba(255,255,255,0.92)"
-                        : "rgba(255,255,255,0.50)",
+                        : "rgba(0,0,0,0.22)",
                     color: message.role === "user" ? "#111" : "#fff",
-                    border:
-                      message.role === "user"
-                        ? "1px solid rgba(255,255,255,0.20)"
-                        : "1px solid rgba(255,255,255,0.08)",
                   }}
                 >
                   {message.text}
@@ -458,19 +531,127 @@ export function ChatWidget({
             ))}
 
             {loading && (
-              <div className="mb-3 flex justify-start">
+              <div className="mb-2 flex justify-start">
                 <div
                   className="flex items-center gap-2"
                   style={{
-                    borderRadius: 18,
-                    padding: "12px 14px",
+                    borderRadius: "18px 18px 18px 4px",
+                    padding: "10px 14px",
                     fontSize: 13,
-                    backgroundColor: "rgba(255,255,255,0.50)",
-                    color: "#fff",
+                    backgroundColor: "rgba(0,0,0,0.22)",
+                    color: "rgba(255,255,255,0.80)",
                   }}
                 >
                   <Loader2 size={14} className="animate-spin" />
-                  Pensando...
+                  Digitando...
+                </div>
+              </div>
+            )}
+
+            {/* Location button — shown contextually when asked */}
+            {showLocationBtn && !loading && (
+              <div className="mb-2 flex justify-start">
+                <button
+                  type="button"
+                  onClick={() => void handleUseMyLocation()}
+                  disabled={locatingUser}
+                  className="flex items-center gap-2 px-3 py-2 rounded-2xl text-xs"
+                  style={{
+                    backgroundColor: "rgba(255,255,255,0.18)",
+                    color: "#fff",
+                    border: "1px solid rgba(255,255,255,0.30)",
+                    fontWeight: 600,
+                    opacity: locatingUser ? 0.7 : 1,
+                  }}
+                >
+                  {locatingUser ? (
+                    <Loader2 size={13} className="animate-spin" />
+                  ) : (
+                    <MapPin size={13} />
+                  )}
+                  {locatingUser ? "Obtendo localização..." : "📍 Usar minha localização"}
+                </button>
+              </div>
+            )}
+
+            {/* Final confirmation card */}
+            {readyToSubmit && issueDraft && !loading && (
+              <div
+                className="mt-2 mb-2 rounded-2xl overflow-hidden"
+                style={{
+                  backgroundColor: "rgba(255,255,255,0.14)",
+                  border: "1px solid rgba(255,255,255,0.22)",
+                }}
+              >
+                <div
+                  className="flex items-center gap-2 px-3 py-2"
+                  style={{
+                    backgroundColor: "rgba(255,255,255,0.16)",
+                    borderBottom: "1px solid rgba(255,255,255,0.12)",
+                  }}
+                >
+                  <CheckCircle2 size={14} color="#4ade80" />
+                  <span
+                    style={{ color: "#fff", fontWeight: 700, fontSize: 12 }}
+                  >
+                    Ocorrência pronta para publicar
+                  </span>
+                </div>
+
+                <div className="px-3 py-2" style={{ fontSize: 12, color: "rgba(255,255,255,0.92)", lineHeight: 1.7 }}>
+                  {issueDraft.title && (
+                    <div><span style={{ opacity: 0.7 }}>Título:</span> <strong>{issueDraft.title}</strong></div>
+                  )}
+                  {issueDraft.category && (
+                    <div><span style={{ opacity: 0.7 }}>Categoria:</span> {issueDraft.category}</div>
+                  )}
+                  {issueDraft.neighborhood && (
+                    <div><span style={{ opacity: 0.7 }}>Bairro:</span> {issueDraft.neighborhood}</div>
+                  )}
+                  {issueDraft.address && (
+                    <div><span style={{ opacity: 0.7 }}>Endereço:</span> {issueDraft.address}</div>
+                  )}
+                  {issueDraft.description && (
+                    <div><span style={{ opacity: 0.7 }}>Descrição:</span> {issueDraft.description}</div>
+                  )}
+                  {issueDraft.severity && (
+                    <div><span style={{ opacity: 0.7 }}>Urgência:</span> {severityPtLabel(issueDraft.severity)}</div>
+                  )}
+                  <div>
+                    <span style={{ opacity: 0.7 }}>Identidade:</span>{" "}
+                    {issueDraft.anonymous ? "Anônimo 🔒" : "Identificado 👤"}
+                  </div>
+                </div>
+
+                <div
+                  className="flex gap-2 px-3 pb-3"
+                >
+                  <button
+                    type="button"
+                    onClick={handlePublish}
+                    className="flex-1 h-9 rounded-xl text-sm flex items-center justify-center gap-2"
+                    style={{
+                      backgroundColor: "#fff",
+                      color: "#F81F39",
+                      fontWeight: 700,
+                    }}
+                  >
+                    Publicar ocorrência
+                    <ChevronRight size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCorrect}
+                    className="h-9 px-3 rounded-xl text-sm"
+                    style={{
+                      backgroundColor: "rgba(255,255,255,0.15)",
+                      color: "#fff",
+                      border: "1px solid rgba(255,255,255,0.12)",
+                      fontSize: 12,
+                    }}
+                  >
+                    Corrigir
+                  </button>
                 </div>
               </div>
             )}
@@ -478,6 +659,7 @@ export function ChatWidget({
             <div ref={messagesEndRef} />
           </div>
 
+          {/* Footer */}
           <div
             className="px-3 pt-2 pb-3 shrink-0"
             style={{
@@ -485,94 +667,26 @@ export function ChatWidget({
               borderTop: "1px solid rgba(255,255,255,0.10)",
             }}
           >
-            <div className="flex gap-2 mb-2 overflow-x-auto">
-              {quickActions.map((action) => (
-                <button
-                  key={action}
-                  type="button"
-                  onClick={() => handleQuickAction(action)}
-                  disabled={loading || isRecording}
-                  className="shrink-0 px-3 py-2 rounded-full text-xs"
-                  style={{
-                    backgroundColor: "rgba(255,255,255,0.18)",
-                    color: "#fff",
-                    border: "1px solid rgba(255,255,255,0.10)",
-                    opacity: loading || isRecording ? 0.6 : 1,
-                  }}
-                >
-                  {action}
-                </button>
-              ))}
-            </div>
-
-            {detectedIssue && issueDraft && (
-              <div
-                className="mb-2 rounded-2xl p-3 max-h-40 overflow-y-auto"
-                style={{
-                  backgroundColor: "rgba(255,255,255,0.18)",
-                  border: "1px solid rgba(255,255,255,0.10)",
-                }}
-              >
-                <div
-                  className="text-xs mb-2"
-                  style={{ color: "#fff", fontWeight: 700 }}
-                >
-                  Ocorrência em construção
-                </div>
-
-                <div
-                  className="text-xs"
-                  style={{
-                    color: "rgba(255,255,255,0.95)",
-                    lineHeight: 1.5,
-                  }}
-                >
-                  <div>• Título: {issueDraft.title || "—"}</div>
-                  <div>• Categoria: {issueDraft.category || "—"}</div>
-                  <div>• Bairro: {issueDraft.neighborhood || "—"}</div>
-                  <div>• Endereço: {issueDraft.address || "—"}</div>
-                </div>
-
-                <div className="flex gap-2 mt-3">
+            {/* Quick actions — only shown before any draft */}
+            {!issueDraft && (
+              <div className="flex gap-2 mb-2 overflow-x-auto pb-1">
+                {quickActions.map((action) => (
                   <button
+                    key={action}
                     type="button"
-                    onClick={openPrefilledReport}
-                    className="flex-1 h-9 rounded-xl text-sm flex items-center justify-center gap-2"
+                    onClick={() => handleQuickAction(action)}
+                    disabled={loading || isRecording}
+                    className="shrink-0 px-3 py-2 rounded-full text-xs"
                     style={{
-                      backgroundColor: "#fff",
-                      color: "#F81F39",
-                      fontWeight: 700,
-                      opacity: readyToSubmit ? 1 : 0.92,
-                    }}
-                  >
-                    <Sparkles size={14} />
-                    {readyToSubmit
-                      ? "Abrir ocorrência preenchida"
-                      : "Continuar no formulário"}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={resetIssueState}
-                    className="h-9 px-3 rounded-xl text-sm"
-                    style={{
-                      backgroundColor: "rgba(255,255,255,0.15)",
+                      backgroundColor: "rgba(255,255,255,0.16)",
                       color: "#fff",
-                      border: "1px solid rgba(255,255,255,0.12)",
+                      border: "1px solid rgba(255,255,255,0.10)",
+                      opacity: loading || isRecording ? 0.6 : 1,
                     }}
                   >
-                    Limpar
+                    {action}
                   </button>
-                </div>
-
-                {missingFields.length > 0 && (
-                  <div
-                    className="mt-2 text-[11px]"
-                    style={{ color: "rgba(255,255,255,0.88)" }}
-                  >
-                    Ainda faltam: {buildMissingFieldsLabel(missingFields).join(", ")}.
-                  </div>
-                )}
+                ))}
               </div>
             )}
 
@@ -591,9 +705,7 @@ export function ChatWidget({
 
             <div
               className="flex items-center gap-2 rounded-2xl px-3 py-2"
-              style={{
-                backgroundColor: "rgba(255,255,255,0.22)",
-              }}
+              style={{ backgroundColor: "rgba(255,255,255,0.20)" }}
             >
               <input
                 value={input}
@@ -604,11 +716,9 @@ export function ChatWidget({
                     void handleSend();
                   }
                 }}
-                placeholder={isRecording ? "Ouvindo..." : "Digite sua mensagem..."}
+                placeholder={isRecording ? "Ouvindo..." : "Responda aqui..."}
                 className="flex-1 bg-transparent outline-none text-sm"
-                style={{
-                  color: "#fff",
-                }}
+                style={{ color: "#fff" }}
                 disabled={loading}
               />
 
@@ -619,10 +729,10 @@ export function ChatWidget({
                   speechSupported
                     ? isRecording
                       ? "Parar gravação"
-                      : "Gravar áudio"
-                    : "Seu navegador não suporta áudio"
+                      : "Usar microfone"
+                    : "Áudio não suportado"
                 }
-                className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+                className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
                 style={{
                   backgroundColor: isRecording
                     ? "rgba(255,255,255,0.92)"
@@ -632,49 +742,51 @@ export function ChatWidget({
                 }}
                 disabled={loading}
               >
-                {isRecording ? <MicOff size={16} /> : <Mic size={16} />}
+                {isRecording ? <MicOff size={15} /> : <Mic size={15} />}
               </button>
 
               <button
                 type="button"
                 onClick={() => void handleSend()}
                 disabled={loading || !input.trim()}
-                className="w-10 h-10 rounded-full flex items-center justify-center shrink-0"
+                className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
                 style={{
                   backgroundColor: "rgba(255,255,255,0.92)",
                   color: "#F81F39",
-                  opacity: loading || !input.trim() ? 0.6 : 1,
+                  opacity: loading || !input.trim() ? 0.5 : 1,
                 }}
               >
                 {loading ? (
-                  <Loader2 size={16} className="animate-spin" />
+                  <Loader2 size={15} className="animate-spin" />
                 ) : (
-                  <Send size={16} />
+                  <Send size={15} />
                 )}
               </button>
             </div>
 
             <div
-              className="mt-2 text-[10px]"
-              style={{ color: "rgba(255,255,255,0.82)" }}
+              className="mt-1.5 text-[10px] text-center"
+              style={{ color: "rgba(255,255,255,0.70)" }}
             >
               {speechSupported
-                ? "Você pode digitar ou usar o microfone. Se gravar, a fala será transcrita no campo."
-                : "Seu navegador não oferece suporte à transcrição por voz neste chat."}
+                ? "Digite ou use o microfone para responder."
+                : "Transcrição por voz não disponível neste navegador."}
             </div>
           </div>
         </div>
       )}
 
+      {/* Toggle button */}
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
         className="fixed bottom-6 right-6 z-[1400] w-14 h-14 rounded-full flex items-center justify-center"
         style={{
           backgroundColor: "#F81F39",
-          boxShadow: "0 14px 36px rgba(0,0,0,0.28)",
+          boxShadow: "0 14px 36px rgba(248,31,57,0.40)",
           color: "#fff",
           border: "1px solid rgba(255,255,255,0.12)",
+          transition: "transform 0.2s ease, box-shadow 0.2s ease",
         }}
         aria-label={open ? "Fechar assistente" : "Abrir assistente"}
       >

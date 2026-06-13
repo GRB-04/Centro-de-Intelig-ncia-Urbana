@@ -1,0 +1,527 @@
+import { writeFileSync } from 'fs';
+import { execSync } from 'child_process';
+import path from 'path';
+
+const htmlContent = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Relatório Técnico-Acadêmico: Projeto ZelaBelém</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    @page {
+      size: A4 portrait;
+      margin: 20mm 20mm 20mm 20mm;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: #ffffff;
+      color: #1f2937;
+      line-height: 1.6;
+      font-size: 11pt;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    
+    /* Cover Header */
+    .report-header {
+      border-bottom: 2px solid #007aff;
+      padding-bottom: 18px;
+      margin-bottom: 24px;
+    }
+    .project-badge {
+      display: inline-block;
+      padding: 4px 10px;
+      background: rgba(0, 122, 255, 0.08);
+      border: 1px solid rgba(0, 122, 255, 0.2);
+      border-radius: 6px;
+      color: #007aff;
+      font-size: 9pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+    .report-title {
+      font-size: 26pt;
+      font-weight: 800;
+      color: #111827;
+      letter-spacing: -0.03em;
+      line-height: 1.2;
+    }
+    .report-subtitle {
+      font-size: 14pt;
+      color: #4b5563;
+      font-weight: 500;
+      margin-top: 6px;
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-top: 18px;
+      font-size: 9.5pt;
+      color: #6b7280;
+      background: #f9fafb;
+      padding: 12px 16px;
+      border-radius: 8px;
+      border: 1px solid #e5e7eb;
+    }
+    .meta-grid strong {
+      color: #374151;
+    }
+    
+    /* Headings */
+    h2 {
+      font-size: 15pt;
+      color: #111827;
+      margin-top: 28px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid #e5e7eb;
+      padding-bottom: 6px;
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+    h3 {
+      font-size: 12pt;
+      color: #111827;
+      margin-top: 18px;
+      margin-bottom: 8px;
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+    
+    /* Content blocks */
+    p {
+      margin-bottom: 12px;
+      text-align: justify;
+    }
+    ul, ol {
+      margin-bottom: 14px;
+      padding-left: 20px;
+    }
+    li {
+      margin-bottom: 6px;
+    }
+    
+    /* Callouts */
+    .callout {
+      background: #f9fafb;
+      border-left: 4px solid #007aff;
+      border-radius: 0 8px 8px 0;
+      padding: 12px 16px;
+      margin: 14px 0;
+      font-size: 10pt;
+    }
+    .callout strong {
+      color: #111827;
+    }
+    
+    /* Tables */
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 14px 0;
+      font-size: 9.5pt;
+    }
+    .data-table th, .data-table td {
+      padding: 8px 10px;
+      border: 1px solid #e5e7eb;
+      text-align: left;
+    }
+    .data-table th {
+      background-color: #f3f4f6;
+      color: #111827;
+      font-weight: 600;
+    }
+    .data-table tr:nth-child(even) {
+      background-color: #f9fafb;
+    }
+    .pk {
+      color: #b76a00;
+      font-weight: 700;
+    }
+    .fk {
+      color: #0a66d1;
+      font-weight: 700;
+    }
+
+    /* Architecture Block Diagram (Clean Vector HTML/CSS) */
+    .arch-diagram {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 18px;
+      margin: 16px 0;
+    }
+    .arch-node {
+      background: #ffffff;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      padding: 10px 14px;
+      text-align: center;
+      width: 30%;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.03);
+    }
+    .arch-node-title {
+      font-weight: 700;
+      font-size: 9.5pt;
+      color: #111827;
+      margin-bottom: 4px;
+    }
+    .arch-node-desc {
+      font-size: 8pt;
+      color: #6b7280;
+    }
+    .arch-node.highlighted {
+      border-color: #007aff;
+      background-color: rgba(0,122,255,0.02);
+    }
+    .arch-arrow {
+      color: #9ca3af;
+      font-size: 14pt;
+      font-weight: bold;
+    }
+    
+    /* Code Blocks */
+    pre, code {
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 9pt;
+    }
+    pre {
+      background-color: #f3f4f6;
+      border: 1px solid #e5e7eb;
+      border-radius: 6px;
+      padding: 12px 16px;
+      overflow-x: auto;
+      margin: 14px 0;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      color: #111827;
+    }
+    
+    /* Page control */
+    .page-break {
+      page-break-before: always;
+      break-before: page;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header Section -->
+  <div class="report-header">
+    <div class="project-badge">Apresentação de Projeto Acadêmico</div>
+    <h1 class="report-title">ZelaBelém</h1>
+    <p class="report-subtitle">Sistema Colaborativo de Problemas Urbanos em Belém - PA</p>
+    <div class="meta-grid">
+      <div><strong>Eixo Temático:</strong> Eixo 1 – Cidade, Mobilidade e Cidadania</div>
+      <div><strong>Tecnologias:</strong> React, TypeScript, PostgreSQL, Supabase, Vercel</div>
+      <div><strong>Contexto Geográfico:</strong> Município de Belém - PA</div>
+      <div><strong>Hospedagem Frontend:</strong> Vercel (Pública)</div>
+    </div>
+  </div>
+
+  <!-- Section 1 -->
+  <h2>1. Problema Identificado (Contexto Real de Belém)</h2>
+  <p>
+    A cidade de Belém, capital do estado do Pará, possui desafios severos em sua infraestrutura básica, mobilidade e zeladoria urbana. Por conta do clima equatorial superúmido e do regime peculiar de marés e canais urbanos, incidentes como <strong>buracos asfálticos</strong> profundos, <strong>iluminação pública ineficiente</strong> em vias secundárias, <strong>descarte irregular de lixo</strong> e <strong>alagamentos</strong> repentinos são recorrentes e causam transtornos permanentes ao tráfego de pedestres e veículos.
+  </p>
+  <p>
+    Atualmente, os moradores contam apenas com canais oficiais burocráticos e lentos (como as centrais telefônicas da SESAN, Seurb e Defesa Civil) que carecem de rastreabilidade. O cidadão comum não possui visualização em tempo real das demandas enviadas pela vizinhança. Consequentemente, ocorrem frequentes denúncias duplicadas para um mesmo problema local e falta de engajamento popular, haja vista a ausência de acompanhamento transparente de status.
+  </p>
+
+  <!-- Section 2 -->
+  <h2>2. Objetivo da Solução</h2>
+  <p>
+    O <strong>ZelaBelém</strong> foi desenvolvido para mitigar esse distanciamento entre a população e os agentes de zeladoria urbana. O objetivo principal do sistema é estabelecer um painel colaborativo e interativo de inteligência onde cidadãos possam mapear problemas urbanos reais georreferenciados e acompanhar de perto sua triagem pelo poder público.
+  </p>
+  <p>
+    <strong>Metas específicas da aplicação:</strong>
+  </p>
+  <ul>
+    <li><strong>Registro ágil e visual:</strong> Permite apontar o local do incidente diretamente no mapa da cidade ou via geocodificação reversa de endereços com anexação de fotos comprobatórias.</li>
+    <li><strong>Apoio Popular (Engajamento Coletivo):</strong> Munícipes podem apoiar (votar) ocorrências já criadas, indicando de forma estatística os problemas mais críticos da comunidade.</li>
+    <li><strong>Acompanhamento de Status:</strong> Transparência total no fluxo da resolução (Status: <em>Aberta</em>, <em>Em análise</em> e <em>Resolvida</em>).</li>
+    <li><strong>IA Cívica Integrada:</strong> Chatbot conversacional que auxilia no preenchimento de relatos e estruturação dos rascunhos.</li>
+  </ul>
+
+  <!-- Section 3 -->
+  <h2>3. Público-Alvo</h2>
+  <p>
+    A solução é dimensionada para atender a duas classes centrais de usuários:
+  </p>
+  <ol>
+    <li>
+      <strong>Moradores e Transeuntes de Belém (Cidadãos):</strong> 
+      Indivíduos que encontram avarias no asfalto, calçadas intransitáveis ou entulho acumulado e desejam reportar e acompanhar sua resolução. O cidadão pode se identificar nominalmente ou relatar de forma anônima para preservar sua privacidade.
+    </li>
+    <li>
+      <strong>Gestores e Técnicos de Serviços Urbanos (Administração):</strong> 
+      Funcionários municipais autorizados a auditar o mapa de calor de incidentes, consultar estatísticas dos bairros mais afetados e alterar o status dos chamados conforme as equipes realizam as intervenções e reparos no local.
+    </li>
+  </ol>
+
+  <div class="page-break"></div>
+
+  <!-- Section 4 -->
+  <h2>4. Disciplinas Integradas</h2>
+  <p>
+    O projeto integra e aplica conceitos transversais de cinco disciplinas do currículo de Computação:
+  </p>
+  <ul>
+    <li>
+      <strong>Engenharia de Software:</strong> 
+      Componentização baseada em component patterns com React e tipagem estática do TypeScript, garantindo manutenibilidade, encapsulamento de estado e detecção de erros em tempo de compilação.
+    </li>
+    <li>
+      <strong>Banco de Dados:</strong> 
+      Modelagem lógica e física do banco relacional PostgreSQL, incluindo chaves primárias, estrangeiras e views SQL agregadoras para contagem performática de apoios populares sem sobrecarregar a rede.
+    </li>
+    <li>
+      <strong>Arquitetura de Software:</strong> 
+      Padrão cliente-servidor desacoplado com integração de APIs de terceiros (RESTful / WebSockets) para geocodificação (Nominatim OSM), processamento de linguagem natural por IA (Groq Cloud LLM API) e renderização de mapas dinâmicos (Leaflet API).
+    </li>
+    <li>
+      <strong>Cloud Computing:</strong> 
+      Deploy serverless contínuo via Vercel (Frontend SPA) e provisionamento de recursos de banco de dados, storage de mídia de imagens e serviços de sincronização em nuvem via Supabase DB.
+    </li>
+    <li>
+      <strong>UX/UI (Design de Interação):</strong> 
+      Interface responsiva premium estruturada para rodar nativamente em mobile e desktop com suporte a temas dark/light e micro-feedbacks visuais interativos.
+    </li>
+  </ul>
+
+  <!-- Section 5 -->
+  <h2>5. Arquitetura da Solução</h2>
+  <p>
+    A arquitetura da solução baseia-se em uma arquitetura de serviços em nuvem integrados ao cliente frontend. A aplicação web consome APIs diretamente para manter-se agnóstica de um servidor backend monolítico.
+  </p>
+  
+  <div class="arch-diagram">
+    <div class="arch-node">
+      <div class="arch-node-title">Interface (React)</div>
+      <div class="arch-node-desc">Painel Cidadão & Admin<br>(Vercel Hosting)</div>
+    </div>
+    <div class="arch-arrow">&harr;</div>
+    <div class="arch-node highlighted">
+      <div class="arch-node-title">APIs de Serviços</div>
+      <div class="arch-node-desc">Groq AI (Llama-3)<br>Nominatim OSM (Endereço)</div>
+    </div>
+    <div class="arch-arrow">&harr;</div>
+    <div class="arch-node">
+      <div class="arch-node-title">Banco & Storage</div>
+      <div class="arch-node-desc">PostgreSQL DB & Storage<br>(Supabase WS Realtime)</div>
+    </div>
+  </div>
+
+  <p>
+    A comunicação do banco com o frontend conta com um canal de **WebSockets em tempo real** provido pelo Supabase. Assim que o administrador atualiza o status de um chamado, todos os usuários conectados visualizam as atualizações de forma instantânea nas listagens e nos marcadores do mapa.
+  </p>
+
+  <!-- Section 6 -->
+  <h2>6. Modelo de Dados</h2>
+  <p>
+    O esquema físico relacional é constituído de duas tabelas e uma view agregadora. O relacionamento garante integridade e previne votos duplicados por meio de restrições de chave composta.
+  </p>
+
+  <h3>Esquema Físico das Tabelas</h3>
+  
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Tabela</th>
+        <th>Coluna</th>
+        <th>Tipo</th>
+        <th>Atributo</th>
+        <th>Descrição</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td rowspan="7" style="font-weight: 600;">issues</td><td class="pk">id</td><td>UUID</td><td>PRIMARY KEY</td><td>Identificador único gerado automaticamente</td></tr>
+      <tr><td>created_at</td><td>TIMESTAMPTZ</td><td>NOT NULL</td><td>Registro de data e hora do chamado</td></tr>
+      <tr><td class="fk">user_id</td><td>UUID</td><td>FOREIGN KEY</td><td>Referência ao usuário autenticado (auth.users)</td></tr>
+      <tr><td>title / description</td><td>TEXT</td><td>NOT NULL</td><td>Título curto e descrição do problema</td></tr>
+      <tr><td>category / severity</td><td>TEXT</td><td>NOT NULL</td><td>Tipo de problema e urgência (baixa/média/alta)</td></tr>
+      <tr><td>address / neighborhood</td><td>TEXT</td><td>-</td><td>Endereço aproximado e bairro de Belém</td></tr>
+      <tr><td>lat / lng</td><td>NUMERIC</td><td>NOT NULL</td><td>Coordenadas decimais exatas no mapa</td></tr>
+      
+      <tr><td rowspan="3" style="font-weight: 600;">issue_votes</td><td class="pk">issue_id</td><td>UUID</td><td>PK, FOREIGN KEY</td><td>Associação à ocorrência (issues.id)</td></tr>
+      <tr><td class="pk">user_id</td><td>UUID</td><td>PK, FOREIGN KEY</td><td>Associação ao usuário que votou</td></tr>
+      <tr><td>created_at</td><td>TIMESTAMPTZ</td><td>-</td><td>Registro de data e hora do voto de apoio</td></tr>
+    </tbody>
+  </table>
+
+  <div class="page-break"></div>
+
+  <h3>Código SQL de Criação (DDL) e Políticas RLS</h3>
+  <pre>-- Tabela principal de Ocorrências
+CREATE TABLE public.issues (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  category TEXT NOT NULL,
+  status TEXT DEFAULT 'aberto'::text NOT NULL,
+  severity TEXT DEFAULT 'medium'::text NOT NULL,
+  address TEXT,
+  neighborhood TEXT,
+  lat NUMERIC NOT NULL,
+  lng NUMERIC NOT NULL,
+  photo_url TEXT,
+  anonymous BOOLEAN DEFAULT false NOT NULL
+);
+
+-- Ativação de Row Level Security (RLS)
+ALTER TABLE public.issues ENABLE ROW LEVEL SECURITY;
+
+-- Políticas de acesso RLS
+CREATE POLICY "Leitura pública para todos" ON public.issues FOR SELECT USING (true);
+CREATE POLICY "Inserção apenas para autenticados" ON public.issues FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Permitir atualização de status" ON public.issues FOR UPDATE USING (true) WITH CHECK (true);
+
+-- Tabela de Votos para evitar votos duplicados (Chave Primária Composta)
+CREATE TABLE public.issue_votes (
+  issue_id UUID REFERENCES public.issues(id) ON DELETE CASCADE NOT NULL,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  PRIMARY KEY (issue_id, user_id)
+);
+
+ALTER TABLE public.issue_votes ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Visualização pública de votos" ON public.issue_votes FOR SELECT USING (true);
+CREATE POLICY "Voto único para autenticados" ON public.issue_votes FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Remoção de voto apenas pelo dono" ON public.issue_votes FOR DELETE USING (auth.uid() = user_id);
+
+-- View para contagem otimizada de votos acumulados por chamado
+CREATE VIEW public.issue_vote_counts AS
+SELECT issue_id, COUNT(*) AS count
+FROM public.issue_votes
+GROUP BY issue_id;</pre>
+
+  <!-- Section 7 -->
+  <h2>7. Protótipo ou Sistema Funcional</h2>
+  <p>
+    O protótipo implantado é dividido em fluxos complementares:
+  </p>
+  <ul>
+    <li>
+      <strong>Mapa de Incidentes (Cidadão):</strong> 
+      Integração com Leaflet para exibir marcadores no território municipal. O cidadão pode arrastar e clicar para fixar coordenadas e anexar fotos com geocodificação reversa automática.
+    </li>
+    <li>
+      <strong>Chatbot Assistente "Zé" (IA):</strong> 
+      Utiliza LLM Llama-3 para interagir com o usuário via chat em linguagem coloquial, interpretar o problema, categorizar a gravidade e gerar um rascunho completo de chamado automaticamente.
+    </li>
+    <li>
+      <strong>Compressão e Salvamento de Imagem:</strong> 
+      Imagens pesadas são processadas localmente via HTML5 Canvas (redimensionamento máximo para 800x800 e compressão de qualidade a 70%). As fotos são enviadas ao Supabase Storage (bucket <code>issue-photos</code>) ou armazenadas como Base64 reduzido em banco de dados caso as cotas de armazenamento expirem.
+    </li>
+    <li>
+      <strong>Painel de Métricas (Administrador):</strong> 
+      Cards analíticos de tempo médio de reparo, bairros com mais denúncias, e seletor rápido para alteração do status de problemas relatados.
+    </li>
+  </ul>
+
+  <div class="page-break"></div>
+
+  <!-- Section 8 -->
+  <h2>8. Deploy ou Simulação em Nuvem</h2>
+  <p>
+    O protótipo funcional foi disponibilizado publicamente na nuvem através das seguintes integrações:
+  </p>
+  <ul>
+    <li>
+      <strong>Frontend:</strong> 
+      Hospedado na plataforma de CDN global serverless da <strong>Vercel</strong>, fornecendo segurança contra quedas de servidor e compilação contínua (CI/CD) automatizada a partir do GitHub.
+      <br>
+      <strong>URL do Sistema:</strong> <a href="https://zelabelem.vercel.app" target="_blank">https://zelabelem.vercel.app</a>
+    </li>
+    <li>
+      <strong>Banco de Dados e Armazenamento:</strong> 
+      Provisionados em nuvem na infraestrutura regional da AWS (região us-east-1) gerenciados pelo **Supabase**. Isso engloba o banco relacional PostgreSQL, o bucket de arquivos públicos para imagens e a sincronização WebSocket.
+    </li>
+  </ul>
+
+  <!-- Section 9 -->
+  <h2>9. Impacto Social Esperado</h2>
+  <p>
+    A implementação em escala do <strong>ZelaBelém</strong> visa gerar os seguintes benefícios para a comunidade local:
+  </p>
+  <ul>
+    <li>
+      <strong>Exercício Prático de Cidadania:</strong> 
+      Facilita a participação cívica direta do morador na manutenção da sua própria rua, dispensando esperas telefônicas ou burocracias fiscais tradicionais.
+    </li>
+    <li>
+      <strong>Priorização Baseada em Dor Real:</strong> 
+      Através do sistema de votos (apoio popular), a prefeitura e os prestadores de serviços urbanos conseguem identificar quais buracos ou canais obstruídos causam mais transtornos, otimizando o envio de equipes a partir da demanda social coletiva.
+    </li>
+    <li>
+      <strong>Aumento da Transparência:</strong> 
+      O andamento visível dos reparos incentiva uma relação de maior confiança e proximidade entre a sociedade belenense e a administração da cidade.
+    </li>
+  </ul>
+
+  <!-- Section 10 -->
+  <h2>10. Avaliação Crítica (Limitações e Melhorias Futuras)</h2>
+  
+  <h3>Limitações Atuais do Protótipo</h3>
+  <ul>
+    <li>
+      <strong>Autenticação Administrativa Local:</strong> O login do administrador utiliza credenciais predefinidas de forma local. Para um sistema em escala, é indispensável a criação de um controle de acesso baseado em papéis (RBAC) integrado ao provedor OAuth/Supabase Auth.
+    </li>
+    <li>
+      <strong>Cotas de API de Geocodificação:</strong> O Nominatim possui limites restritos de requisições sob uso intensivo.
+    </li>
+    <li>
+      <strong>Moderação Prévia:</strong> O sistema publica as ocorrências de forma direta. A falta de uma camada de moderação automática pode expor dados inadequados ou chamados duplicados no mapa.
+    </li>
+  </ul>
+
+  <h3>Evoluções Propostas</h3>
+  <ol>
+    <li>
+      <strong>Inteligência Artificial de Imagem:</strong> Utilizar Visão Computacional para analisar fotos enviadas pelos cidadãos, detectar automaticamente se o problema condiz com a categoria selecionada e estimar a urgência da avaria.
+    </li>
+    <li>
+      <strong>Modo Offline e PWA:</strong> Permitir o registro das coordenadas e fotos sem conexão de dados nas ilhas ou periferias de Belém, sincronizando automaticamente no banco assim que houver sinal de internet.
+    </li>
+    <li>
+      <strong>Notificações Push:</strong> Disparar notificações no e-mail ou no dispositivo móvel do cidadão sempre que o chamado por ele criado (ou apoiado) tiver o status alterado para "Resolvido".
+    </li>
+  </ol>
+
+</body>
+</html>`;
+
+const tempHtmlPath = path.resolve('apresentacao_temp.html');
+const outputPdfPath = path.resolve('apresentacao_zelabelem.pdf');
+const outputDocPath = path.resolve('apresentacao_zelabelem.doc');
+
+try {
+  console.log('Gravando arquivo HTML temporário no formato Relatório Técnico...');
+  writeFileSync(tempHtmlPath, htmlContent, 'utf-8');
+
+  console.log('Exportando documento Word (.doc)...');
+  writeFileSync(outputDocPath, htmlContent, 'utf-8');
+
+  console.log('Buscando e executando Google Chrome para conversão em PDF (A4 Portrait)...');
+  const chromePath = 'C:\\\\Program Files\\\\Google\\\\Chrome\\\\Application\\\\chrome.exe';
+  
+  // Executa o Chrome para converter o HTML de formato acadêmico contínuo em PDF (Retrato A4) sem cabeçalhos/rodapés padrão do navegador
+  execSync(`"${chromePath}" --headless --disable-gpu --print-to-pdf="${outputPdfPath}" --no-header-footer --print-to-pdf-no-header "${tempHtmlPath}"`);
+  
+  console.log('PDF e DOC gerados com sucesso!');
+} catch (err) {
+  console.error('Erro ao gerar os arquivos:', err);
+}

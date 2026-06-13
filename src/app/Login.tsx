@@ -1,19 +1,50 @@
 import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 
-type OtpStep = "email" | "code";
+// ─── Admin credentials (hardcoded for academic use) ───────────────────────
+const ADMIN_EMAIL = "admin@zelabelem.com.br";
+const ADMIN_PASSWORD = "admin";
+const ADMIN_SESSION_KEY = "zelabelem_admin_session";
+
+export type AdminSession = {
+  isAdmin: true;
+  email: string;
+  name: string;
+};
+
+export function getAdminSession(): AdminSession | null {
+  try {
+    const raw = localStorage.getItem(ADMIN_SESSION_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as AdminSession;
+  } catch {
+    return null;
+  }
+}
+
+export function clearAdminSession() {
+  localStorage.removeItem(ADMIN_SESSION_KEY);
+}
+
+type OtpStep = "email" | "code" | "password";
 
 interface LoginProps {
   onBypass?: () => void;
+  onAdminLogin?: (session: AdminSession) => void;
 }
 
-export default function Login({ onBypass: _onBypass }: LoginProps) {
+export default function Login({ onBypass: _onBypass, onAdminLogin }: LoginProps) {
   // ─── OTP flow ────────────────────────────────────────────────────────────
   const [otpStep, setOtpStep] = useState<OtpStep>("email");
+  const [authMode, setAuthMode] = useState<"login" | "register" | "admin">("login");
+  const [otpName, setOtpName] = useState("");
   const [otpEmail, setOtpEmail] = useState("");
   const [otpDigits, setOtpDigits] = useState(["", "", "", "", "", ""]);
   const otpRefs = useRef<(HTMLInputElement | null)[]>([]);
   const [resendCooldown, setResendCooldown] = useState(0);
+
+  // ─── Admin password ───────────────────────────────────────────────────────
+  const [adminPassword, setAdminPassword] = useState("");
 
   // ─── Shared ───────────────────────────────────────────────────────────────
   const [loading, setLoading] = useState(false);
@@ -42,11 +73,29 @@ export default function Login({ onBypass: _onBypass }: LoginProps) {
       return;
     }
 
+    // ─── Admin shortcut ───────────────────────────────────────────────────
+    if (otpEmail.trim().toLowerCase() === ADMIN_EMAIL) {
+      setAdminPassword("");
+      setOtpStep("password");
+      return;
+    }
+
+    if (authMode === "register" && !otpName.trim()) {
+      setError("Por favor, digite seu nome.");
+      return;
+    }
+
     try {
       setLoading(true);
+
+      const options: any = { shouldCreateUser: authMode === "register" };
+      if (authMode === "register" && otpName.trim()) {
+        options.data = { full_name: otpName.trim() };
+      }
+
       const { error } = await supabase.auth.signInWithOtp({
         email: otpEmail.trim(),
-        options: { shouldCreateUser: true },
+        options,
       });
       if (error) throw error;
 
@@ -57,12 +106,43 @@ export default function Login({ onBypass: _onBypass }: LoginProps) {
       const msg = String(err?.message ?? "");
       if (msg.toLowerCase().includes("rate limit")) {
         setError("Muitas tentativas. Aguarde alguns minutos.");
+      } else if (msg.toLowerCase().includes("signups not allowed") || msg.toLowerCase().includes("not found")) {
+        setError("Conta não encontrada. Por favor, cadastre-se primeiro.");
       } else {
         setError(msg || "Não foi possível enviar o código.");
       }
     } finally {
       setLoading(false);
     }
+  }
+
+  // ─── Admin: verify password ───────────────────────────────────────────────
+  function handleAdminLogin(e: React.FormEvent) {
+    e.preventDefault();
+    resetMessages();
+
+    if (!adminPassword) {
+      setError("Digite a senha do administrador.");
+      return;
+    }
+
+    if (adminPassword !== ADMIN_PASSWORD) {
+      setError("Senha incorreta. Tente novamente.");
+      return;
+    }
+
+    const session: AdminSession = {
+      isAdmin: true,
+      email: ADMIN_EMAIL,
+      name: "Administrador",
+    };
+
+    localStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(session));
+    setSuccess("✅ Acesso administrativo autorizado! Carregando painel…");
+
+    setTimeout(() => {
+      if (onAdminLogin) onAdminLogin(session);
+    }, 600);
   }
 
   // ─── OTP: verify code ─────────────────────────────────────────────────────
@@ -78,12 +158,19 @@ export default function Login({ onBypass: _onBypass }: LoginProps) {
 
     try {
       setLoading(true);
-      const { error } = await supabase.auth.verifyOtp({
+      const { data, error } = await supabase.auth.verifyOtp({
         email: otpEmail.trim(),
         token,
         type: "email",
       });
       if (error) throw error;
+
+      if (otpName.trim() && data?.session) {
+        await supabase.auth.updateUser({
+          data: { full_name: otpName.trim() }
+        });
+      }
+
       setSuccess("✅ Acesso autorizado! Carregando painel…");
     } catch (err: any) {
       const msg = String(err?.message ?? "");
@@ -135,18 +222,66 @@ export default function Login({ onBypass: _onBypass }: LoginProps) {
         </div>
         <h1 style={s.title}>ZelaBelém</h1>
 
-        {/* ── STEP 1: Email ── */}
+        {/* ── Access type selector (shown on first step) ── */}
+        {otpStep === "email" && (
+          <div style={s.accessSelector}>
+            <button
+              type="button"
+              style={{ ...s.accessBtn, ...(authMode !== "admin" ? s.accessBtnActive : {}) }}
+              onClick={() => { setAuthMode("login"); resetMessages(); }}
+            >
+              👤 Cidadão
+            </button>
+            <button
+              type="button"
+              style={{ ...s.accessBtn, ...(authMode === "admin" ? { ...s.accessBtnActive, background: "#2d1f00", borderColor: "#f59e0b", color: "#fbbf24" } : {}) }}
+              onClick={() => {
+                setOtpEmail(ADMIN_EMAIL);
+                setAdminPassword("");
+                setOtpStep("password");
+                resetMessages();
+              }}
+            >
+              🛡️ Administrador
+            </button>
+          </div>
+        )}
+
+        {/* ── STEP 1: Email (Cidadão) ── */}
         {otpStep === "email" && (
           <>
+            <div style={s.tabContainer}>
+              <button type="button" onClick={() => { setAuthMode("login"); resetMessages(); }} style={{ ...s.tabBtn, background: authMode === "login" ? "#2A2A33" : "transparent", color: authMode === "login" ? "#fff" : "#71717A" }}>
+                Entrar
+              </button>
+              <button type="button" onClick={() => { setAuthMode("register"); resetMessages(); }} style={{ ...s.tabBtn, background: authMode === "register" ? "#2A2A33" : "transparent", color: authMode === "register" ? "#fff" : "#71717A" }}>
+                Cadastrar
+              </button>
+            </div>
+
             <p style={s.subtitle}>
-              Digite seu email e receba um código de acesso.{" "}
-              <br />
-              <span style={{ color: "#71717A", fontSize: 12 }}>
-                Novo por aqui? Sua conta é criada automaticamente.
-              </span>
+              {authMode === "login"
+                ? "Digite seu email para receber um código de acesso."
+                : "Crie sua conta informando seus dados abaixo."}
             </p>
 
             <form onSubmit={handleSendOtp} style={s.form}>
+              {authMode === "register" && (
+                <>
+                  <label style={s.label}>Nome</label>
+                  <input
+                    style={s.input}
+                    type="text"
+                    placeholder="Como quer ser chamado?"
+                    value={otpName}
+                    onChange={(e) => setOtpName(e.target.value)}
+                    autoComplete="name"
+                    autoFocus
+                    required
+                  />
+                </>
+              )}
+
               <label style={s.label}>Email</label>
               <input
                 style={s.input}
@@ -155,19 +290,19 @@ export default function Login({ onBypass: _onBypass }: LoginProps) {
                 value={otpEmail}
                 onChange={(e) => setOtpEmail(e.target.value)}
                 autoComplete="email"
-                autoFocus
+                autoFocus={authMode === "login"}
                 required
               />
 
               <button
                 style={{
                   ...s.button,
-                  opacity: loading || !otpEmail.trim() ? 0.6 : 1,
-                  cursor: loading || !otpEmail.trim() ? "not-allowed" : "pointer",
+                  opacity: loading || !otpEmail.trim() || (authMode === "register" && !otpName.trim()) ? 0.6 : 1,
+                  cursor: loading || !otpEmail.trim() || (authMode === "register" && !otpName.trim()) ? "not-allowed" : "pointer",
                 }}
-                disabled={loading || !otpEmail.trim()}
+                disabled={loading || !otpEmail.trim() || (authMode === "register" && !otpName.trim())}
               >
-                {loading ? "Enviando…" : "Enviar código"}
+                {loading ? "Enviando…" : (authMode === "login" ? "Continuar" : "Criar conta")}
               </button>
 
               {success && <div style={s.success}>{success}</div>}
@@ -244,6 +379,91 @@ export default function Login({ onBypass: _onBypass }: LoginProps) {
             </form>
           </>
         )}
+
+        {/* ── STEP 3: Admin password ── */}
+        {otpStep === "password" && (
+          <>
+            <div style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 4,
+              marginBottom: 14,
+            }}>
+              <div style={{
+                width: 52, height: 52, borderRadius: "50%",
+                background: "rgba(245,158,11,0.15)",
+                border: "1px solid rgba(245,158,11,0.4)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontSize: 24,
+              }}>🛡️</div>
+              <span style={{ color: "#f59e0b", fontWeight: 700, fontSize: 15 }}>
+                Acesso Administrativo
+              </span>
+            </div>
+
+            {/* Credentials hint */}
+            <div style={{
+              background: "rgba(245,158,11,0.08)",
+              border: "1px solid rgba(245,158,11,0.2)",
+              borderRadius: 12,
+              padding: "10px 14px",
+              marginBottom: 16,
+              textAlign: "left",
+            }}>
+              <div style={{ fontSize: 11, color: "#a16207", marginBottom: 4, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Credenciais de acesso
+              </div>
+              <div style={{ fontSize: 13, color: "#fbbf24", fontFamily: "monospace" }}>
+                📧 {ADMIN_EMAIL}
+              </div>
+              <div style={{ fontSize: 13, color: "#fbbf24", fontFamily: "monospace" }}>
+                🔑 Senha: <strong>admin</strong>
+              </div>
+            </div>
+
+            <form onSubmit={handleAdminLogin} style={s.form}>
+              <label style={s.label}>Senha do Administrador</label>
+              <input
+                style={s.input}
+                type="password"
+                placeholder="Digite a senha"
+                value={adminPassword}
+                onChange={(e) => setAdminPassword(e.target.value)}
+                autoFocus
+                required
+              />
+
+              <button
+                style={{
+                  ...s.button,
+                  background: "linear-gradient(135deg, #f59e0b, #d97706)",
+                  opacity: !adminPassword ? 0.6 : 1,
+                  cursor: !adminPassword ? "not-allowed" : "pointer",
+                }}
+                disabled={!adminPassword}
+              >
+                Entrar como Administrador
+              </button>
+
+              <button
+                type="button"
+                style={s.linkBtn}
+                onClick={() => {
+                  setOtpStep("email");
+                  setOtpEmail("");
+                  setAdminPassword("");
+                  resetMessages();
+                }}
+              >
+                ← Voltar para login cidadão
+              </button>
+
+              {success && <div style={s.success}>{success}</div>}
+              {error && <div style={s.error}>{error}</div>}
+            </form>
+          </>
+        )}
       </div>
     </div>
   );
@@ -251,6 +471,29 @@ export default function Login({ onBypass: _onBypass }: LoginProps) {
 
 // ─── Styles ────────────────────────────────────────────────────────────────
 const s: Record<string, React.CSSProperties> = {
+  accessSelector: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 8,
+    marginBottom: 20,
+  },
+  accessBtn: {
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid #2A2A33",
+    background: "transparent",
+    color: "#71717A",
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    transition: "all 0.2s",
+  },
+  accessBtnActive: {
+    background: "#1a2535",
+    borderColor: "#0A84FF",
+    color: "#60a5fa",
+  },
+
   page: {
     minHeight: "100vh",
     display: "grid",
@@ -275,7 +518,7 @@ const s: Record<string, React.CSSProperties> = {
     textAlign: "center",
   },
   logoWrap: { display: "grid", placeItems: "center", marginBottom: 12 },
-  logo: { width: 90, height: 90, borderRadius: 20, objectFit: "contain", background: "#ffffff", padding: 8, boxShadow: "0 8px 24px rgba(0,0,0,.4)" },
+  logo: { width: 90, height: 90, objectFit: "contain", borderRadius: "22%" },
   title: { margin: "6px 0 10px", fontSize: 28, fontWeight: 700 },
   subtitle: { margin: "0 0 20px", fontSize: 14, color: "#A1A1AA", lineHeight: 1.5 },
 
@@ -291,6 +534,23 @@ const s: Record<string, React.CSSProperties> = {
     outline: "none",
     fontSize: 14,
     boxSizing: "border-box",
+  },
+  tabContainer: {
+    display: "flex",
+    background: "#0E0E12",
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 20,
+  },
+  tabBtn: {
+    flex: 1,
+    padding: "10px 0",
+    border: "none",
+    borderRadius: 10,
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: "pointer",
+    transition: "all 0.2s",
   },
 
   // OTP digit boxes

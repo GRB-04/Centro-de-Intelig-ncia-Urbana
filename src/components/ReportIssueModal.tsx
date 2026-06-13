@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from "react-leaflet"
 import "leaflet/dist/leaflet.css"
 import L from "leaflet"
@@ -6,7 +7,51 @@ import { ImagePlus, Loader2, MapPin } from 'lucide-react'
 import type { Occurrence, OccurrenceSeverity } from '../types/occurrence'
 import type { AddressSuggestion } from '../services/geocoding'
 import { searchAddresses, reverseGeocode } from '../services/geocoding'
+import { polishDescription } from '../services/chatbot'
+import { supabase, isSupabaseConfigured } from '../lib/supabase'
 import './report-issue-modal.css'
+
+function compressAndGetBase64(file: File, maxWidth = 800, maxHeight = 800, quality = 0.7): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+        } else {
+          if (height > maxHeight) {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(event.target?.result as string);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', quality);
+        resolve(dataUrl);
+      };
+      img.onerror = (err) => reject(err);
+    };
+    reader.onerror = (err) => reject(err);
+  });
+}
+
 
 interface ReportIssueModalProps {
   onClose: () => void
@@ -133,11 +178,13 @@ function ReportIssueModal({ onClose, onCreate, initialData, theme = 'light' }: R
   }, [selectedPosition])
 
   const [selectedFileName, setSelectedFileName] = useState('')
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [suggestions, setSuggestions] = useState<AddressSuggestion[]>([])
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false)
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [addressError, setAddressError] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const debounceRef = useRef<number | null>(null)
   const suggestionsBoxRef = useRef<HTMLDivElement | null>(null)
 
@@ -285,17 +332,69 @@ function ReportIssueModal({ onClose, onCreate, initialData, theme = 'light' }: R
     setAddressError('')
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    if (isSubmitting) return
+    setIsSubmitting(true)
+
+    let polishedDesc = description.trim()
+    try {
+      polishedDesc = await polishDescription(polishedDesc)
+    } catch (err) {
+      console.warn("Failed to polish description on submit:", err)
+    }
 
     const fallbackLat = DEFAULT_CENTER[0]
     const fallbackLng = DEFAULT_CENTER[1]
     const [latitude, longitude] = selectedPosition ?? [fallbackLat, fallbackLng]
 
+    let imageUrl: string | undefined = undefined
+
+    if (selectedFile) {
+      // 1. Tenta fazer upload para Supabase Storage se configurado
+      if (isSupabaseConfigured) {
+        try {
+          const { data: auth } = await supabase.auth.getUser()
+          const user = auth?.user
+          if (user) {
+            const bucket = 'issue-photos'
+            const ext = selectedFile.name.split('.').pop() || 'jpg'
+            const path = `${user.id}/${crypto.randomUUID()}.${ext}`
+
+            const { error: upErr } = await supabase.storage
+              .from(bucket)
+              .upload(path, selectedFile, {
+                cacheControl: '3600',
+                upsert: false,
+              })
+
+            if (upErr) {
+              console.warn('Erro ao enviar foto para Supabase Storage, tentando base64 comprimido:', upErr)
+            } else {
+              const { data } = supabase.storage.from(bucket).getPublicUrl(path)
+              imageUrl = data?.publicUrl ?? undefined
+            }
+          }
+        } catch (err) {
+          console.warn('Erro durante upload de imagem para Supabase:', err)
+        }
+      }
+
+      // 2. Se não conseguiu fazer upload (ou sem Supabase), faz compressão e usa Base64
+      if (!imageUrl) {
+        try {
+          imageUrl = await compressAndGetBase64(selectedFile)
+        } catch (err) {
+          console.warn('Falha ao converter foto comprimida para base64, usando preview:', err)
+          imageUrl = previewUrl ?? undefined
+        }
+      }
+    }
+
     const newOccurrence: Occurrence = {
       id: crypto.randomUUID(),
       title: title.trim(),
-      description: description.trim(),
+      description: polishedDesc,
       address: address.trim(),
       neighborhood: neighborhood.trim(),
       category: resolvedCategory,
@@ -306,11 +405,17 @@ function ReportIssueModal({ onClose, onCreate, initialData, theme = 'light' }: R
       createdAt: new Date().toISOString(),
       supportCount: 0,
       anonymous,
-      imageUrl: selectedFileName || undefined,
+      imageUrl,
     }
 
-    onCreate(newOccurrence)
-    onClose()
+    try {
+      onCreate(newOccurrence)
+      onClose()
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   const tileUrl = isDark
@@ -319,7 +424,7 @@ function ReportIssueModal({ onClose, onCreate, initialData, theme = 'light' }: R
 
   const attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
 
-  return (
+  return createPortal(
     <div className="modal-overlay" style={{ backgroundColor: isDark ? 'rgba(0,0,0,0.6)' : 'rgba(17,24,39,0.28)' }} onClick={onClose}>
       <div
         className="modal-card modal-card--issue"
@@ -539,10 +644,12 @@ function ReportIssueModal({ onClose, onCreate, initialData, theme = 'light' }: R
                   const file = e.target.files?.[0]
                   if (file) {
                     setSelectedFileName(file.name)
+                    setSelectedFile(file)
                     if (previewUrl) URL.revokeObjectURL(previewUrl)
                     setPreviewUrl(URL.createObjectURL(file))
                   } else {
                     setSelectedFileName('')
+                    setSelectedFile(null)
                     setPreviewUrl(null)
                   }
                 }}
@@ -599,17 +706,26 @@ function ReportIssueModal({ onClose, onCreate, initialData, theme = 'light' }: R
               className="secondary-button"
               style={{ backgroundColor: isDark ? '#2a2a2e' : 'rgba(17,24,39,0.06)', color: textColor }}
               onClick={onClose}
+              disabled={isSubmitting}
             >
               Cancelar
             </button>
 
-            <button type="submit" className="primary-button">
-              Criar ocorrência
+            <button type="submit" className="primary-button" disabled={isSubmitting}>
+              {isSubmitting ? (
+                <>
+                  <Loader2 size={16} className="spin" style={{ marginRight: '8px', display: 'inline-block' }} />
+                  Enviando...
+                </>
+              ) : (
+                'Criar ocorrência'
+              )}
             </button>
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }
 

@@ -230,22 +230,30 @@ export async function sendMessageToChatbot(params: {
   }
 
   const systemPrompt = `
-Você é o Assistente Urbano do sistema "Belém Urban Intelligence Dashboard".
+Você é o Zé, assistente virtual amigável do ZelaBelém — sistema colaborativo de problemas urbanos de Belém do Pará.
 
-Seu papel:
-1. Responder dúvidas sobre o sistema de forma clara, amigável e objetiva.
-2. Detectar quando o usuário está descrevendo um problema urbano real.
-3. Quando for um relato urbano, conduzir a conversa naturalmente para coletar os campos necessários de uma ocorrência.
+Seu papel principal:
+1. Detectar quando o usuário quer REPORTAR um problema urbano.
+2. Conduzir uma CONVERSA GUIADA, perguntando UMA COISA POR VEZ, como um atendente humano prestativo.
+3. Responder dúvidas gerais sobre o sistema de forma clara e curta.
 
-Campos desejados da ocorrência:
-- title
-- category
-- otherCategory
-- neighborhood
-- address
-- description
-- severity
-- anonymous
+FLUXO DE COLETA (siga esta ordem, mas de forma natural):
+Passo 1 — Confirmar interesse: Ao detectar um problema, pergunte: "Quer que eu te ajude a registrar essa ocorrência?"
+Passo 2 — Descrição do problema: Se ainda não tiver, peça uma descrição do problema.
+Passo 3 — Localização: Pergunte o endereço ou bairro onde acontece o problema. Informe que a pessoa também pode usar o botão de localização automática.
+Passo 4 — Urgência: Pergunte o nível de urgência (baixa, média, alta ou crítica) de forma simples.
+Passo 5 — Anonimato: Pergunte se a pessoa quer que o nome dela apareça ou prefere registrar de forma anônima.
+Passo 6 — Confirmação: Quando tiver todos os dados, diga que vai montar o resumo e pergunte se a pessoa deseja publicar.
+
+REGRAS IMPORTANTES:
+- Faça APENAS UMA PERGUNTA por vez. Nunca liste várias perguntas juntas.
+- Seja breve, acolhedor e direto. Máximo 2-3 frases por mensagem.
+- Tente inferir categoria, título e severidade automaticamente a partir do que o usuário disse. Não pergunte o que já está claro.
+- No campo "description" de "issueData", SEMPRE analise o relato do usuário, corrija erros ortográficos e de digitação de forma sutil, e faça um resumo claro, conciso e objetivo. O usuário não deve notar que o texto foi corrigido (não mencione a correção na sua resposta).
+- Se o usuário já deu o endereço junto com a descrição do problema, não pergunte de novo.
+- Quando readyToSubmit for true, a interface vai mostrar um card de confirmação automaticamente. Avise o usuário que o resumo vai aparecer para ele confirmar.
+- Se o usuário não quiser reportar, ajude normalmente.
+- Responda sempre em português do Brasil.
 
 Categorias válidas:
 - Abastecimento de Água
@@ -261,34 +269,16 @@ Categorias válidas:
 - Vias e Pavimentação
 - Outros
 
-Níveis válidos de severity:
-- critical
-- high
-- medium
-- low
-
-Comportamento desejado:
-- Fale em português do Brasil.
-- Seja natural, acolhedor e prático.
-- Se o usuário não souber termos como "título da ocorrência", explique com linguagem simples.
-- Se perceber um relato urbano, não empurre imediatamente para um formulário.
-- Vá perguntando o que falta, como um atendente humano.
-- Tente inferir categoria, descrição e urgência quando isso estiver claro.
-- Se algo não estiver claro, pergunte de forma simples.
-- Se o usuário estiver só tirando dúvida, responda normalmente.
-- Se o usuário quiser anonimato, marque anonymous=true.
-- Quando já houver informação suficiente para abrir uma ocorrência preenchida, marque readyToSubmit=true.
+Níveis de severity: critical, high, medium, low
 
 IMPORTANTE:
 Você DEVE responder APENAS em JSON válido.
-Sem markdown.
-Sem crases.
-Sem explicações fora do JSON.
+Sem markdown. Sem crases. Sem texto fora do JSON.
 
 Formato obrigatório:
 {
   "mode": "help" | "report",
-  "reply": "texto que será mostrado ao usuário",
+  "reply": "texto da mensagem para o usuário (curto, 1-3 frases)",
   "detectedIssue": true | false,
   "issueData": {
     "title": string | undefined,
@@ -380,5 +370,51 @@ Formato obrigatório:
   } catch (err) {
     console.warn("Network error or fetch failed. Falling back to local NLP:", err);
     return localChatbotFallback(params.userMessage, normalizedDraft, params.currentUserName);
+  }
+}
+
+export async function polishDescription(text: string): Promise<string> {
+  const apiKey = import.meta.env.VITE_GROQ_API_KEY;
+  if (!apiKey || !text.trim()) {
+    return text.trim();
+  }
+
+  const systemPrompt = `Você é um assistente de redação e polimento para o ZelaBelém.
+Sua tarefa é analisar o relato de um cidadão sobre um problema urbano em Belém do Pará, corrigir de forma sutil quaisquer erros ortográficos, gramaticais e de digitação, e resumi-lo levemente se for excessivamente longo ou confuso.
+O objetivo é tornar o texto claro, conciso e bem escrito, mantendo o tom natural e em primeira ou terceira pessoa conforme relatado (mas sem gírias excessivas ou insultos), ideal para ser lido por órgãos públicos ou outros cidadãos.
+Não adicione informações extras que não estavam no relato. Não mude o sentido do relato.
+IMPORTANTE: Retorne APENAS o texto corrigido e polido. Não inclua introduções, explicações, aspas ou saudações.`.trim();
+
+  try {
+    const response = await fetch(GROQ_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        temperature: 0.2,
+        max_tokens: 300,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: text },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      return text.trim();
+    }
+
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content;
+    if (content && typeof content === "string") {
+      return content.trim();
+    }
+    return text.trim();
+  } catch (err) {
+    console.warn("Error in polishDescription:", err);
+    return text.trim();
   }
 }

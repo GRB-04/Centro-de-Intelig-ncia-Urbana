@@ -1,8 +1,16 @@
 @import "tailwindcss";
 
-* {
-  box-sizing: border-box;
+@keyframes slideUpFade {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
+
 
 :root {
   font-family: Inter, Arial, Helvetica, sans-serif;
@@ -80,12 +88,9 @@ textarea {
 .brand-logo {
   width: 52px;
   height: 52px;
-  border-radius: 14px;
+  border-radius: 22%;
   object-fit: contain;
-  background: #ffffff;
-  padding: 4px;
-  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.12);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: transform 0.2s ease;
   flex-shrink: 0;
 }
 
@@ -347,6 +352,12 @@ textarea {
   margin: 0;
   color: #6b7280;
   font-size: 14px;
+  line-height: 1.5;
+  /* Limit to 3 lines so cards don't get too tall */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .occurrence-badges {
@@ -399,10 +410,7 @@ textarea {
   color: #c1271f;
 }
 
-.category-badge {
-  background: rgba(17, 24, 39, 0.06);
-  color: #374151;
-}
+
 
 .occurrence-meta {
   display: flex;
@@ -421,22 +429,39 @@ textarea {
 
 .occurrence-footer {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-top: 16px;
-  gap: 12px;
+  margin-top: 14px;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Category badge in footer — allow it to shrink but show as much as possible */
+.category-badge {
+  display: inline-block;
+  text-align: center;
+  background: rgba(17, 24, 39, 0.06);
+  color: #374151;
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .support-button {
+  flex-shrink: 0;
   margin-left: auto;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 14px;
+  gap: 6px;
+  padding: 8px 12px;
   border-radius: 14px;
   background: rgba(0, 122, 255, 0.08);
   color: #0a66d1;
   font-weight: 700;
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .support-count {
@@ -638,17 +663,20 @@ textarea {
   right: 24px;
   bottom: 96px;
   width: 360px;
-  height: 600px;
+  height: 600px !important;
   max-height: calc(100vh - 120px);
   max-width: calc(100vw - 32px);
   z-index: 1101;
   border-radius: 24px;
-  overflow: hidden;
+  overflow: hidden !important;
   background: rgba(255, 255, 255, 0.97);
   border: 1px solid rgba(17, 24, 39, 0.06);
   box-shadow: 0 20px 50px rgba(17, 24, 39, 0.15);
   display: flex;
   flex-direction: column;
+  /* Prevent panel from growing when content is added */
+  flex-shrink: 0;
+  contain: strict;
 }
 
 .chat-header {
@@ -657,6 +685,7 @@ textarea {
   align-items: flex-start;
   padding: 16px 18px;
   border-bottom: 1px solid rgba(17, 24, 39, 0.06);
+  flex-shrink: 0;
 }
 
 .chat-title {
@@ -683,12 +712,17 @@ textarea {
 
 .chat-body {
   padding: 16px;
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 0;
+  min-height: 0 !important;
+  max-height: 100%;
   overflow-y: auto;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* Scrollable area — panel height is fixed, this scrolls */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(17,24,39,0.15) transparent;
 }
 
 .chat-bubble {
@@ -715,6 +749,7 @@ textarea {
   gap: 8px;
   padding: 14px 16px 16px;
   border-top: 1px solid rgba(17, 24, 39, 0.06);
+  flex-shrink: 0;
 }
 
 .chat-input {
@@ -741,6 +776,46 @@ textarea {
   padding: 24px;
   color: #6b7280;
   text-align: center;
+}
+
+/* Chat location action */
+.chat-location-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.chat-location-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #007aff, #5ac8fa);
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.chat-location-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.chat-location-hint {
+  font-size: 12px;
+  color: #9ca3af;
+  padding-left: 4px;
+}
+
+/* Final review card */
+.chat-draft-card--final {
+  border: 2px solid rgba(0, 122, 255, 0.3) !important;
 }
 
 /* RESPONSIVO */
@@ -1496,3 +1571,100 @@ textarea {
 .profile-dropdown-item--logout:hover {
   background: rgba(255, 69, 58, 0.12) !important;
 }
+
+/* ─── Admin Banner ─────────────────────────────────────────────────────────── */
+.admin-banner {
+  margin: 0 0 16px 0;
+  padding: 12px 20px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(217, 119, 6, 0.1));
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #f59e0b;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: center;
+  letter-spacing: 0.01em;
+}
+
+/* ─── Admin profile button ─────────────────────────────────────────────────── */
+.profile-button--admin {
+  border: 1px solid rgba(245, 158, 11, 0.4) !important;
+  background: rgba(245, 158, 11, 0.1) !important;
+  color: #f59e0b !important;
+}
+
+.admin-badge-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 20px;
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #f59e0b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* ─── Admin status dropdown in occurrence cards ────────────────────────────── */
+.admin-status-select-wrapper {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.admin-status-select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 4px 22px 4px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  outline: none;
+  transition: all 0.2s;
+  line-height: 1.4;
+}
+
+.admin-status-select--aberta {
+  background: rgba(99, 102, 241, 0.15);
+  border-color: rgba(99, 102, 241, 0.35);
+  color: #818cf8;
+}
+
+.admin-status-select--em-analise {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.35);
+  color: #fbbf24;
+}
+
+.admin-status-select--resolvida {
+  background: rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.35);
+  color: #4ade80;
+}
+
+.admin-status-select option {
+  background: #1a1a1e;
+  color: #f9fafb;
+  font-weight: 500;
+}
+
+.admin-status-chevron {
+  position: absolute;
+  right: 7px;
+  pointer-events: none;
+  opacity: 0.6;
+  color: currentColor;
+}
+
+.admin-status-select:hover {
+  filter: brightness(1.15);
+}
+
+/* Dark mode refinements */
+.dashboard.dark .admin-banner {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(217, 119, 6, 0.08));
+}

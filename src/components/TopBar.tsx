@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Bell, Search, UserCircle2, Sun, Moon, LogOut, Settings, User } from 'lucide-react'
+import { Bell, Search, UserCircle2, Sun, Moon, LogOut, Settings, User, ShieldCheck } from 'lucide-react'
 
 interface TopBarProps {
   search: string
@@ -8,6 +8,7 @@ interface TopBarProps {
   onToggleTheme: () => void
   userName?: string
   onLogout?: () => void
+  isAdmin?: boolean
 }
 
 function TopBar({
@@ -17,6 +18,7 @@ function TopBar({
   onToggleTheme,
   userName = 'Convidado',
   onLogout,
+  isAdmin = false,
 }: TopBarProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
@@ -69,42 +71,55 @@ function TopBar({
 
         <div className="profile-menu-container" ref={dropdownRef}>
           <button
-            className="profile-button"
+            className={`profile-button${isAdmin ? ' profile-button--admin' : ''}`}
             onClick={() => setDropdownOpen((prev) => !prev)}
             aria-label="Menu do usuário"
             aria-expanded={dropdownOpen}
           >
-            <UserCircle2 size={18} />
+            {isAdmin ? <ShieldCheck size={18} /> : <UserCircle2 size={18} />}
             <span>{userName}</span>
+            {isAdmin && <span className="admin-badge-pill">Admin</span>}
           </button>
 
           {dropdownOpen ? (
             <div className="profile-dropdown">
-              <div className="profile-dropdown-header">Opções do Usuário</div>
-              
-              <button
-                type="button"
-                className="profile-dropdown-item"
-                onClick={() => {
-                  setDropdownOpen(false)
-                  alert('Visualização do perfil em desenvolvimento.')
-                }}
-              >
-                <User size={16} />
-                <span>Meu Perfil</span>
-              </button>
+              <div className="profile-dropdown-header">
+                {isAdmin ? (
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#f59e0b' }}>
+                    <ShieldCheck size={14} /> Administrador
+                  </span>
+                ) : (
+                  'Opções do Usuário'
+                )}
+              </div>
 
-              <button
-                type="button"
-                className="profile-dropdown-item"
-                onClick={() => {
-                  setDropdownOpen(false)
-                  alert('Configurações da conta em desenvolvimento.')
-                }}
-              >
-                <Settings size={16} />
-                <span>Configurações</span>
-              </button>
+              {!isAdmin && (
+                <>
+                  <button
+                    type="button"
+                    className="profile-dropdown-item"
+                    onClick={() => {
+                      setDropdownOpen(false)
+                      alert('Visualização do perfil em desenvolvimento.')
+                    }}
+                  >
+                    <User size={16} />
+                    <span>Meu Perfil</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className="profile-dropdown-item"
+                    onClick={() => {
+                      setDropdownOpen(false)
+                      alert('Configurações da conta em desenvolvimento.')
+                    }}
+                  >
+                    <Settings size={16} />
+                    <span>Configurações</span>
+                  </button>
+                </>
+              )}
 
               <button
                 type="button"

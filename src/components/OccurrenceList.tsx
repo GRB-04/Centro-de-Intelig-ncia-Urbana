@@ -5,9 +5,12 @@ interface OccurrenceListProps {
   occurrences: Occurrence[]
   onSupport: (id: string) => void
   votedByMe?: Set<string>
+  isAdmin?: boolean
+  onChangeStatus?: (id: string, status: Occurrence['status']) => void
+  theme?: 'light' | 'dark'
 }
 
-function OccurrenceList({ occurrences, onSupport, votedByMe = new Set() }: OccurrenceListProps) {
+function OccurrenceList({ occurrences, onSupport, votedByMe = new Set(), isAdmin, onChangeStatus, theme = 'dark' }: OccurrenceListProps) {
   if (occurrences.length === 0) {
     return <div className="empty-state">Nenhuma ocorrência encontrada para essa busca.</div>
   }
@@ -20,6 +23,9 @@ function OccurrenceList({ occurrences, onSupport, votedByMe = new Set() }: Occur
           occurrence={occurrence}
           onSupport={onSupport}
           isSupported={votedByMe.has(occurrence.id)}
+          isAdmin={isAdmin}
+          onChangeStatus={onChangeStatus}
+          theme={theme}
         />
       ))}
     </div>
